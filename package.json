@@ -1,0 +1,56 @@
+{
+  "name": "tasks-desktop",
+  "version": "0.1.0",
+  "description": "A non-touch, mouse/keyboard-first desktop app with Tasks.org-compatible features and CalDAV sync.",
+  "main": "dist-electron/main.js",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:electron": "tsc -p electron/tsconfig.json && tsc -p electron/tsconfig.preload.json && electron .",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p electron/tsconfig.json && tsc -p electron/tsconfig.preload.json",
+    "build": "npm run build:renderer && npm run build:electron",
+    "start": "npm run build && electron .",
+    "package": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "ical.js": "^2.1.0",
+    "nanoid": "^5.0.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "rrule": "^2.8.1",
+    "tsdav": "^2.1.3"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^42.5.1",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2"
+  },
+  "build": {
+    "appId": "com.arlis.tasksdesktop",
+    "productName": "Tasks Desktop",
+    "files": [
+      "dist",
+      "dist-electron",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}
