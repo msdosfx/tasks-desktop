@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -27,15 +27,13 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build and package (Windows)
-        if: runner.os == 'Windows'
+      - name: Build
+        run: npm run build
+
+      - name: Package
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npm run package
-
-      - name: Build and package (macOS and Linux)
-        if: runner.os != 'Windows'
-        run: npm run package
+        run: npx electron-builder --publish never
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
