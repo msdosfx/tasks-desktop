@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -34,6 +37,9 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder --publish never
+
+      - name: List release files
+        run: ls release/
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
