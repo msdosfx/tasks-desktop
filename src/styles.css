@@ -1,5 +1,5 @@
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; }
+html, body, #root { height: 100%; margin: 0; overflow: hidden; }
 body {
   font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: #1e1f22;
@@ -32,7 +32,7 @@ input, textarea, select { user-select: text; }
   justify-content: space-between;
   align-items: center;
 }
-.sidebar-list { flex: 1; overflow-y: auto; }
+.sidebar-list { flex: 1; overflow-y: auto; min-height: 0; }
 .sidebar-item {
   display: flex;
   align-items: center;
@@ -57,7 +57,7 @@ input, textarea, select { user-select: text; }
   font-size: 12px;
 }
 .sidebar-add:hover { background: #232326; color: #fff; }
-.sidebar-footer { padding: 8px 14px 0; border-top: 1px solid #2c2d30; margin-top: 8px; }
+.sidebar-footer { padding: 8px 14px 0; border-top: 1px solid #2c2d30; margin-top: 8px; flex-shrink: 0; }
 .sidebar-footer button {
   width: 100%;
   padding: 6px 0;
@@ -288,3 +288,20 @@ input, textarea, select { user-select: text; }
 .calendar-pick button.primary:hover { background: #3f7fc1; }
 .calendar-pick button:disabled { opacity: .6; cursor: default; }
 .modal-close { position: absolute; top: 14px; right: 18px; cursor: pointer; color: #9aa0a6; background:none; border:none; font-size: 18px; }
+.settings-save-bar {
+  position: sticky;
+  bottom: -20px;
+  margin: 14px -20px -20px;
+  padding: 12px 20px;
+  background: #1e1f22;
+  border-top: 1px solid #34353a;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.settings-save-bar button { padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; border: 1px solid #34353a; background: #26272a; color: #e6e6e6; }
+.settings-save-bar button.primary { background: #4a90d9; border-color: #4a90d9; color: #fff; font-weight: 600; }
+.settings-save-bar button.primary:hover { background: #3f7fc1; }
+.settings-save-bar button:disabled { opacity: .5; cursor: default; }
+  

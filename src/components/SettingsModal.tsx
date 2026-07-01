@@ -18,9 +18,14 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
   const [calendarsByAccount, setCalendarsByAccount] = useState<Record<string, DiscoveredCalendar[]>>({});
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  // Pending (unsaved) dropdown selection per calendar URL, keyed so changing
-  // the select doesn't take effect until the row's Save button is clicked.
+  // Pending (unsaved) dropdown selections, keyed by calendar URL. Nothing here
+  // takes effect until the single "Save changes" button is clicked.
   const [pendingByCal, setPendingByCal] = useState<Record<string, string>>({});
+  const [advancedLinking, setAdvancedLinking] = useState(() => localStorage.getItem("advancedListLinking") === "1");
+
+  useEffect(() => {
+    localStorage.setItem("advancedListLinking", advancedLinking ? "1" : "0");
+  }, [advancedLinking]);
 
   async function refresh() {
     setAccounts(await window.api.accounts.all());
@@ -93,40 +98,69 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
     }
   }
 
-  /** Commits the pending dropdown choice for one calendar: links it to an existing
-   *  list, creates+links a new list, or unlinks it — then runs an immediate sync
-   *  for that account so the list's tasks show up right away instead of waiting
-   *  for the next manual Sync Now. */
-  async function saveCalendarLink(accountId: string, cal: DiscoveredCalendar, linkedListId: string | undefined) {
-    const selected = pendingByCal[cal.url] ?? (linkedListId ?? "");
+  /** Commits every pending calendar-link change across all accounts at once:
+   *  links, creates+links, or unlinks as needed, then runs one sync per affected
+   *  account so newly-linked lists show up right away. Nothing is written until
+   *  this is called — closing the modal beforehand discards pending choices. */
+  async function saveAllChanges() {
+    const entries = Object.entries(pendingByCal);
+    if (entries.length === 0) return;
     setBusy(true);
     setTestMsg(null);
+    const accountsToSync = new Set<string>();
+    const errors: string[] = [];
     try {
-      if (selected === "__new__") {
-        const newList = await window.api.lists.create(cal.displayName, cal.color ?? undefined);
-        await window.api.accounts.linkList(newList.id, accountId, cal.url);
-      } else if (selected === "") {
-        if (linkedListId) await window.api.accounts.unlinkList(linkedListId);
-      } else {
-        await window.api.accounts.linkList(selected, accountId, cal.url);
+      for (const [calUrl, selected] of entries) {
+        let accountId: string | undefined;
+        let cal: DiscoveredCalendar | undefined;
+        for (const [accId, cals] of Object.entries(calendarsByAccount)) {
+          const found = cals.find((c) => c.url === calUrl);
+          if (found) { accountId = accId; cal = found; break; }
+        }
+        if (!accountId || !cal) continue;
+        const linkedList = lists.find((l) => l.caldav_calendar_url === calUrl);
+        try {
+          if (selected === "__new__") {
+            const newList = await window.api.lists.create(cal.displayName, cal.color ?? undefined);
+            await window.api.accounts.linkList(newList.id, accountId, calUrl);
+            accountsToSync.add(accountId);
+          } else if (selected === "") {
+            if (linkedList) {
+              // Unlink first so no future sync touches the server, then remove the
+              // list (and its locally-synced tasks) from this app. The remote
+              // calendar and its items are untouched.
+              await window.api.accounts.unlinkList(linkedList.id);
+              await window.api.lists.delete(linkedList.id);
+            }
+          } else {
+            await window.api.accounts.linkList(selected, accountId, calUrl);
+            accountsToSync.add(accountId);
+          }
+        } catch (err: any) {
+          errors.push(`${cal.displayName}: ${err?.message || err}`);
+        }
       }
-      onListsChanged();
-      if (selected !== "") {
-        const results = await onSyncAccount(accountId);
-        const pulled = results.reduce((sum, r) => sum + r.pulled, 0);
-        const errors = results.flatMap((r) => r.errors);
-        setTestMsg(errors.length ? `Linked, but sync had errors: ${errors[0]}` : `Linked and synced — ${pulled} task(s) pulled.`);
-      }
-      setPendingByCal((prev) => {
-        const next = { ...prev };
-        delete next[cal.url];
-        return next;
-      });
-    } catch (err: any) {
-      setTestMsg(err?.message || String(err));
     } finally {
-      setBusy(false);
+      // The link/unlink/create calls above are already committed to the database
+      // at this point (each has its own try/catch, so one failure doesn't stop
+      // the rest). The pending selections have effectively been "saved" no
+      // matter what happens next, so clear them now -- otherwise a slow or
+      // failing sync below would leave the UI stuck showing "unsaved changes"
+      // with no way to clear it, even though the actual link already succeeded.
+      onListsChanged();
+      setPendingByCal({});
     }
+
+    try {
+      for (const accId of accountsToSync) {
+        const res = await onSyncAccount(accId);
+        errors.push(...res.flatMap((r) => r.errors));
+      }
+    } catch (err: any) {
+      errors.push(err?.message || String(err));
+    }
+    setTestMsg(errors.length ? `Saved with errors: ${errors[0]}` : "Changes saved.");
+    setBusy(false);
   }
 
   async function removeAccount(id: string) {
@@ -165,6 +199,10 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
           Connect a CalDAV server (Nextcloud, Tasks.org sync provider, DAVx5-compatible server, etc.) to sync tasks
           with your existing Tasks.org setup.
         </p>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#9aa0a6", marginBottom: 10 }}>
+          <input type="checkbox" checked={advancedLinking} onChange={(e) => setAdvancedLinking(e.target.checked)} />
+          Additional list linking options (link a calendar to an existing list)
+        </label>
 
         {accounts.map((acc) => (
           <div className="account-card" key={acc.id}>
@@ -186,34 +224,67 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
             {calendarsByAccount[acc.id]?.map((cal) => {
               const linkedList = lists.find((l) => l.caldav_calendar_url === cal.url);
               const current = linkedList?.id ?? "";
-              const selected = pendingByCal[cal.url] ?? current;
-              const dirty = selected !== current;
+              const isConnected = current !== "";
+              const pending = pendingByCal[cal.url];
+              const selected = pending ?? current;
+              const dirty = pending !== undefined;
               return (
                 <div className="calendar-pick" key={cal.url}>
                   <span>{cal.displayName}</span>
-                  <div style={{ display: "flex", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {dirty && <span style={{ fontSize: 11, color: "#e8a23d" }}>Unsaved</span>}
                     <select
                       value={selected}
                       disabled={busy}
-                      onChange={(e) => setPendingByCal((prev) => ({ ...prev, [cal.url]: e.target.value }))}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setPendingByCal((prev) => {
+                          const next = { ...prev };
+                          if (val === current) delete next[cal.url];
+                          else next[cal.url] = val;
+                          return next;
+                        });
+                      }}
                     >
-                      <option value="">Not linked</option>
-                      <option value="__new__">Add as new list</option>
-                      {lists.map((l) => <option key={l.id} value={l.id}>Add to {l.name}</option>)}
+                      {isConnected ? (
+                        <>
+                          <option value={current} disabled>Connected</option>
+                          <option value="">Not linked</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="">Not linked</option>
+                          <option value="__new__">Connected</option>
+                        </>
+                      )}
+                      {advancedLinking &&
+                        lists.filter((l) => l.id !== current).map((l) => (
+                          <option key={l.id} value={l.id}>Add to {l.name}</option>
+                        ))}
                     </select>
-                    <button
-                      className={dirty ? "primary" : undefined}
-                      disabled={busy || !dirty}
-                      onClick={() => saveCalendarLink(acc.id, cal, linkedList?.id)}
-                    >
-                      {dirty ? "Save" : "Saved"}
-                    </button>
                   </div>
                 </div>
               );
             })}
           </div>
         ))}
+
+        {accounts.length > 0 && (
+          <div className="settings-save-bar">
+            {Object.keys(pendingByCal).length > 0 && (
+              <span style={{ fontSize: 12, color: "#9aa0a6" }}>
+                {Object.keys(pendingByCal).length} unsaved change{Object.keys(pendingByCal).length === 1 ? "" : "s"}
+              </span>
+            )}
+            <button
+              className="primary"
+              disabled={busy || Object.keys(pendingByCal).length === 0}
+              onClick={saveAllChanges}
+            >
+              Save changes
+            </button>
+          </div>
+        )}
 
         <h3 style={{ marginTop: 18 }}>Add account</h3>
         <div className="form-grid">
@@ -231,18 +302,4 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
               type="button"
               className="password-toggle"
               onClick={() => setShowPassword((v) => !v)}
-              title={showPassword ? "Hide password" : "Show password"}
-            >
-              {showPassword ? "🙈" : "👁"}
-            </button>
-          </div>
-          <div className="form-actions">
-            <button onClick={testDraft} disabled={busy}>Test connection</button>
-            <button className="primary" onClick={addAccount} disabled={busy}>Save account</button>
-          </div>
-        </div>
-        {testMsg && <p style={{ fontSize: 12, color: "#9aa0a6" }}>{testMsg}</p>}
-      </div>
-    </div>
-  );
-}
+              title={showPassword ? "Hide pa

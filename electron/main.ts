@@ -83,13 +83,7 @@ function buildMenu() {
         { role: "cut" },
         { role: "copy" },
         { role: "paste" },
-        { role: "selectAll" },
-        { type: "separator" },
-        {
-          label: "Settings…",
-          accelerator: "CmdOrCtrl+,",
-          click: () => mainWindow?.webContents.send("shortcut:open-settings")
-        }
+        { role: "selectAll" }
       ]
     },
     {
@@ -103,6 +97,16 @@ function buildMenu() {
         { type: "separator" },
         { role: "reload" },
         { role: "toggleDevTools" }
+      ]
+    },
+    {
+      label: "Account",
+      submenu: [
+        {
+          label: "CalDAV Accounts…",
+          accelerator: "CmdOrCtrl+,",
+          click: () => mainWindow?.webContents.send("shortcut:open-settings")
+        }
       ]
     },
     {
@@ -191,5 +195,4 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+  if (process.p
