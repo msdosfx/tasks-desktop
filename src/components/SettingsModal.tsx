@@ -302,4 +302,18 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
               type="button"
               className="password-toggle"
               onClick={() => setShowPassword((v) => !v)}
-              title={showPassword ? "Hide pa
+              title={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? "🙈" : "👁"}
+            </button>
+          </div>
+          <div className="form-actions">
+            <button onClick={testDraft} disabled={busy}>Test connection</button>
+            <button className="primary" onClick={addAccount} disabled={busy}>Save account</button>
+          </div>
+        </div>
+        {testMsg && <p style={{ fontSize: 12, color: "#9aa0a6" }}>{testMsg}</p>}
+      </div>
+    </div>
+  );
+}
