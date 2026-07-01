@@ -23,9 +23,13 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install Linux dependencies
+      - name: Install Linux packaging dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y libfuse2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08 org.electronjs.Electron2.BaseApp//24.08
 
       - name: Install dependencies
         run: npm install
@@ -46,7 +50,8 @@ jobs:
         with:
           files: |
             release/*.exe
-            release/*.AppImage
+            release/*.deb
+            release/*.flatpak
             release/*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
