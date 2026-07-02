@@ -304,4 +304,3 @@ input, textarea, select { user-select: text; }
 .settings-save-bar button.primary { background: #4a90d9; border-color: #4a90d9; color: #fff; font-weight: 600; }
 .settings-save-bar button.primary:hover { background: #3f7fc1; }
 .settings-save-bar button:disabled { opacity: .5; cursor: default; }
-  

@@ -48,6 +48,10 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
     setBusy(true);
     setTestMsg(null);
     try {
+      if (!(await window.api.accounts.ensureHostPermission(serverUrl))) {
+        setTestMsg("Permission to contact that server was denied.");
+        return;
+      }
       const created = await window.api.accounts.create({ label: label || serverUrl, server_url: serverUrl, username, password });
       setLabel(""); setServerUrl(""); setUsername(""); setPassword("");
       await refresh();
@@ -67,6 +71,10 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
     setBusy(true);
     setTestMsg(null);
     try {
+      if (!(await window.api.accounts.ensureHostPermission(serverUrl))) {
+        setTestMsg("Permission to contact that server was denied.");
+        return;
+      }
       const res = await window.api.accounts.testConnection({ server_url: serverUrl, username, password });
       setTestMsg(res.message);
     } catch (err: any) {
@@ -79,6 +87,11 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
   async function discover(accountId: string) {
     setBusy(true);
     try {
+      const account = accounts.find((a) => a.id === accountId);
+      if (account && !(await window.api.accounts.ensureHostPermission(account.server_url))) {
+        setTestMsg("Permission to contact that server was denied.");
+        return;
+      }
       const cals = await window.api.accounts.discoverCalendars(accountId);
       setCalendarsByAccount((prev) => ({ ...prev, [accountId]: cals }));
     } catch (err: any) {
@@ -91,6 +104,10 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
   async function test(account: CaldavAccountPublic) {
     setBusy(true);
     try {
+      if (!(await window.api.accounts.ensureHostPermission(account.server_url))) {
+        setTestMsg("Permission to contact that server was denied.");
+        return;
+      }
       const res = await window.api.accounts.testConnection(account);
       setTestMsg(res.message);
     } finally {
@@ -173,6 +190,11 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
     setBusy(true);
     setTestMsg(null);
     try {
+      const account = accounts.find((a) => a.id === accountId);
+      if (account && !(await window.api.accounts.ensureHostPermission(account.server_url))) {
+        setTestMsg("Permission to contact that server was denied.");
+        return;
+      }
       const results = await onSyncAccount(accountId);
       await refresh();
       const pulled = results.reduce((sum, r) => sum + r.pulled, 0);

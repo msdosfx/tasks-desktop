@@ -85,6 +85,13 @@ declare global {
       };
       accounts: {
         all: () => Promise<CaldavAccountPublic[]>;
+        // No-op (always true) under Electron, which has no CORS/permission
+        // model to satisfy. Under the Thunderbird add-on, requests the
+        // optional host permission for this server's origin -- must be
+        // called from a click handler (user gesture), which is why it's a
+        // separate call the UI makes before testConnection/create/sync,
+        // not something bundled invisibly into those.
+        ensureHostPermission: (serverUrl: string) => Promise<boolean>;
         create: (input: { label: string; server_url: string; username: string; password: string }) => Promise<CaldavAccountPublic>;
         update: (id: string, patch: any) => Promise<CaldavAccountPublic>;
         delete: (id: string) => Promise<void>;

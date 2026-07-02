@@ -18,6 +18,9 @@ const api = {
   },
   accounts: {
     all: () => ipcRenderer.invoke("accounts:all"),
+    // Electron has no CORS/host-permission model to satisfy -- see
+    // src/types.ts's comment on this method for why it exists at all.
+    ensureHostPermission: async (_serverUrl: string) => true,
     create: (input: any) => ipcRenderer.invoke("accounts:create", input),
     update: (id: string, patch: any) => ipcRenderer.invoke("accounts:update", id, patch),
     delete: (id: string) => ipcRenderer.invoke("accounts:delete", id),
