@@ -50,6 +50,8 @@ jobs:
         with:
           files: |
             release/*.exe
+            release/*.exe.blockmap
+            release/latest*.yml
             release/*.deb
             release/*.flatpak
             release/*.dmg

@@ -18,6 +18,7 @@
     "dev:addon": "vite --config thunderbird-addon/vite.config.ts"
   },
   "dependencies": {
+    "electron-updater": "^6.3.9",
     "ical.js": "^2.1.0",
     "nanoid": "^5.0.7",
     "react": "^18.3.1",
@@ -46,6 +47,11 @@
     ],
     "directories": {
       "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "msdosfx",
+      "repo": "tasks-desktop"
     },
     "mac": {
       "target": "dmg"

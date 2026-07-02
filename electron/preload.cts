@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 const api = {
+  app: {
+    version: () => ipcRenderer.invoke("app:version"),
+    installUpdate: () => ipcRenderer.invoke("update:install")
+  },
   lists: {
     all: () => ipcRenderer.invoke("lists:all"),
     create: (name: string, color?: string) => ipcRenderer.invoke("lists:create", name, color),

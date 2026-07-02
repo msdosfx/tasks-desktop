@@ -307,3 +307,18 @@ input, textarea, select { user-select: text; }
 .settings-save-bar button.primary { background: #4a90d9; border-color: #4a90d9; color: #fff; font-weight: 600; }
 .settings-save-bar button.primary:hover { background: #3f7fc1; }
 .settings-save-bar button:disabled { opacity: .5; cursor: default; }
+
+.about-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid #2c2d30;
+  font-size: 12px;
+  color: #9aa0a6;
+}
+.about-row button.primary {
+  background: #4a90d9; border: none; color: #fff;
+  padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12px;
+}

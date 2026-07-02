@@ -1,6 +1,9 @@
 import { app, BrowserWindow, ipcMain, Menu, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import electronUpdater from "electron-updater";
+
+const { autoUpdater } = electronUpdater;
 import {
   listsAll,
   listCreate,
@@ -123,7 +126,25 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+/** Auto-update (Windows/NSIS only). deb/flatpak installs update through the
+ *  package manager or a manual download, and electron-updater can't help there. */
+function setupAutoUpdater() {
+  if (!app.isPackaged || process.platform !== "win32") return;
+  const send = (state: string, detail?: unknown) =>
+    mainWindow?.webContents.send("update:status", state, detail);
+  autoUpdater.on("checking-for-update", () => send("checking"));
+  autoUpdater.on("update-available", (info: any) => send("available", info.version));
+  autoUpdater.on("update-not-available", () => send("none"));
+  autoUpdater.on("download-progress", (p: any) => send("downloading", Math.round(p.percent)));
+  autoUpdater.on("update-downloaded", (info: any) => send("downloaded", info.version));
+  autoUpdater.on("error", (err: any) => send("error", err?.message || String(err)));
+  autoUpdater.checkForUpdates().catch(() => {});
+}
+
 function registerIpc() {
+  ipcMain.handle("app:version", () => app.getVersion());
+  ipcMain.handle("update:install", () => autoUpdater.quitAndInstall());
+
   ipcMain.handle("lists:all", () => listsAll());
   ipcMain.handle("lists:create", (_e, name: string, color?: string) => listCreate(name, color));
   ipcMain.handle("lists:update", (_e, id: string, patch: any) => listUpdate(id, patch));
@@ -188,6 +209,7 @@ app.whenReady().then(() => {
   registerIpc();
   buildMenu();
   createWindow();
+  setupAutoUpdater();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

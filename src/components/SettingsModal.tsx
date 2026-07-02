@@ -22,6 +22,13 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
   // takes effect until the single "Save changes" button is clicked.
   const [pendingByCal, setPendingByCal] = useState<Record<string, string>>({});
   const [advancedLinking, setAdvancedLinking] = useState(() => localStorage.getItem("advancedListLinking") === "1");
+  const [version, setVersion] = useState<string>("");
+  const [update, setUpdate] = useState<{ state: string; detail?: any } | null>(null);
+
+  useEffect(() => {
+    window.api.app?.version().then(setVersion).catch(() => {});
+    return window.api.on("update:status", (state: string, detail?: any) => setUpdate({ state, detail }));
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("advancedListLinking", advancedLinking ? "1" : "0");
@@ -335,6 +342,22 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
           </div>
         </div>
         {testMsg && <p style={{ fontSize: 12, color: "#9aa0a6" }}>{testMsg}</p>}
+
+        <div className="about-row">
+          <span>Tasks Desktop{version ? ` v${version}` : ""}</span>
+          <span>
+            {update?.state === "checking" && "Checking for updates…"}
+            {update?.state === "none" && "Up to date"}
+            {update?.state === "available" && `Downloading v${update.detail}…`}
+            {update?.state === "downloading" && `Downloading update… ${update.detail}%`}
+            {update?.state === "error" && `Update check failed: ${update.detail}`}
+            {update?.state === "downloaded" && (
+              <button className="primary" onClick={() => window.api.app?.installUpdate()}>
+                Restart to update to v{update.detail}
+              </button>
+            )}
+          </span>
+        </div>
       </div>
     </div>
   );

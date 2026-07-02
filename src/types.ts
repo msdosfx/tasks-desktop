@@ -68,6 +68,11 @@ export const PRIORITY_COLORS: Record<number, string> = {
 declare global {
   interface Window {
     api: {
+      /** Absent in the Thunderbird add-on shim -- always optional-chain. */
+      app?: {
+        version: () => Promise<string>;
+        installUpdate: () => Promise<void>;
+      };
       lists: {
         all: () => Promise<TaskList[]>;
         create: (name: string, color?: string) => Promise<TaskList>;
