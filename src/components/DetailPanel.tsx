@@ -21,9 +21,26 @@ const RECUR_PRESETS: { label: string; value: string | null }[] = [
   { label: "Yearly", value: "FREQ=YEARLY" }
 ];
 
-function toInputDate(v: string | null): string {
-  if (!v) return "";
-  return v.length >= 10 ? v.slice(0, 10) : v;
+/** Splits a stored value ("YYYY-MM-DD" or full ISO datetime) into local-time
+ *  date and time input values. Time is "" for date-only tasks. */
+function splitDateTime(v: string | null): { date: string; time: string } {
+  if (!v) return { date: "", time: "" };
+  if (v.length <= 10) return { date: v, time: "" };
+  const d = new Date(v);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  };
+}
+
+/** Date-only stays a plain "YYYY-MM-DD" (synced as an iCal DATE); with a time
+ *  it becomes a full ISO datetime (synced as DATE-TIME), matching Tasks.org's
+ *  optional due/start times. */
+function joinDateTime(date: string, time: string): string | null {
+  if (!date) return null;
+  if (!time) return date;
+  return new Date(`${date}T${time}`).toISOString();
 }
 
 export default function DetailPanel({ task, lists, subtasks, allCategories = [], onUpdate, onDelete, onAddSubtask, onToggleComplete, onSelectTask }: Props) {
@@ -31,7 +48,9 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
   const [notes, setNotes] = useState("");
   const [listId, setListId] = useState("");
   const [startDate, setStartDate] = useState("");
+  const [startTime, setStartTime] = useState("");
   const [dueDate, setDueDate] = useState("");
+  const [dueTime, setDueTime] = useState("");
   const [priority, setPriority] = useState(0);
   const [recurMode, setRecurMode] = useState<string>("custom");
   const [customRecur, setCustomRecur] = useState("");
@@ -43,8 +62,10 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
     setTitle(task?.title ?? "");
     setNotes(task?.notes ?? "");
     setListId(task?.list_id ?? "");
-    setStartDate(toInputDate(task?.start_date ?? null));
-    setDueDate(toInputDate(task?.due_date ?? null));
+    const sd = splitDateTime(task?.start_date ?? null);
+    setStartDate(sd.date); setStartTime(sd.time);
+    const dd = splitDateTime(task?.due_date ?? null);
+    setDueDate(dd.date); setDueTime(dd.time);
     setPriority(task?.priority ?? 0);
     setTags(task?.tags ?? "");
     const preset = RECUR_PRESETS.find((p) => p.value === (task?.recurrence ?? null));
@@ -67,8 +88,8 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
       title: title.trim() || task!.title,
       notes,
       list_id: listId,
-      start_date: startDate || null,
-      due_date: dueDate || null,
+      start_date: joinDateTime(startDate, startTime),
+      due_date: joinDateTime(dueDate, dueTime),
       priority: priority as any,
       recurrence,
       tags
@@ -99,11 +120,19 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
       <div className="detail-row">
         <div>
           <label>Start date</label>
-          <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); markDirty(); }} />
+          <div className="date-time-pair">
+            <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); markDirty(); }} />
+            <input type="time" value={startTime} disabled={!startDate} title={startDate ? "Optional time" : "Set a date first"}
+              onChange={(e) => { setStartTime(e.target.value); markDirty(); }} />
+          </div>
         </div>
         <div>
           <label>Due date</label>
-          <input type="date" value={dueDate} onChange={(e) => { setDueDate(e.target.value); markDirty(); }} />
+          <div className="date-time-pair">
+            <input type="date" value={dueDate} onChange={(e) => { setDueDate(e.target.value); markDirty(); }} />
+            <input type="time" value={dueTime} disabled={!dueDate} title={dueDate ? "Optional time" : "Set a date first"}
+              onChange={(e) => { setDueTime(e.target.value); markDirty(); }} />
+          </div>
         </div>
       </div>
 

@@ -93,13 +93,13 @@ export default function App() {
     if (hideCompleted) {
       base = base.filter((t) => !t.completed);
     }
-    if (categoryFilter !== "all" && scope !== "today" && scope !== "all") {
+    if (categoryFilter !== "all" && scope !== "today") {
       base = base.filter((t) => {
         const cats = (t.tags || "").split(",").map((c) => c.trim()).filter(Boolean);
         return cats.includes(categoryFilter);
       });
     }
-    if (dueFilter !== "all" && scope !== "today" && scope !== "all") {
+    if (dueFilter !== "all" && scope !== "today") {
       const now = new Date();
       const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const endOfDay = new Date(startOfToday); endOfDay.setDate(endOfDay.getDate() + 1);
@@ -140,14 +140,15 @@ export default function App() {
   }, [tasks]);
 
   const categoriesInScope = useMemo(() => {
-    if (scope === "all" || scope === "today") return [];
+    if (scope === "today") return [];
+    if (scope === "all") return allCategories;
     const scopeTasks = tasks.filter((t) => t.list_id === scope);
     const seen = new Set<string>();
     for (const t of scopeTasks) {
       (t.tags || "").split(",").map((c) => c.trim()).filter(Boolean).forEach((c) => seen.add(c));
     }
     return [...seen].sort();
-  }, [tasks, scope]);
+  }, [tasks, scope, allCategories]);
 
   const selectedTask = tasks.find((t) => t.id === selectedTaskId) || null;
   const subtasksOfSelected = selectedTask ? tasks.filter((t) => t.parent_id === selectedTask.id) : [];
@@ -311,7 +312,7 @@ export default function App() {
           <button className="primary" onClick={createTaskInScope}>+ New task (Ctrl+N)</button>
         </div>
         <div className="toolbar-filters">
-          {scope !== "all" && scope !== "today" && (<>
+          {scope !== "today" && (<>
             <select
               className="due-filter-select"
               value={dueFilter}

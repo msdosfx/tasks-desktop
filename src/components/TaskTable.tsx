@@ -13,8 +13,12 @@ function formatDue(due: string | null): { text: string; overdue: boolean } | nul
   if (!due) return null;
   const d = new Date(due);
   const now = new Date();
-  const overdue = d < now && d.toDateString() !== now.toDateString();
-  const text = d.toDateString() === now.toDateString() ? "Today" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const hasTime = due.length > 10;
+  // Date-only tasks aren't overdue during their own day; timed tasks are
+  // overdue the moment their time passes.
+  const overdue = hasTime ? d < now : d < now && d.toDateString() !== now.toDateString();
+  let text = d.toDateString() === now.toDateString() ? "Today" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  if (hasTime) text += ` ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
   return { text, overdue };
 }
 

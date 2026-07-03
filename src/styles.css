@@ -322,3 +322,7 @@ input, textarea, select { user-select: text; }
   background: #4a90d9; border: none; color: #fff;
   padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12px;
 }
+
+.date-time-pair { display: flex; gap: 6px; }
+.date-time-pair input[type="date"] { flex: 1; min-width: 0; }
+.date-time-pair input[type="time"] { width: 92px; flex-shrink: 0; }
