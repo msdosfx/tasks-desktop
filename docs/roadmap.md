@@ -32,9 +32,15 @@
   table + dirty-flag sync like tasks, and UI. Also opens the door to assigning contacts
   to tasks later.
 
-## Bundled CalDAV server ("self-contained" variant)
-- Idea: a package variant that ships its own CalDAV server, so sync works with zero
-  external setup and phones running Tasks.org/DAVx5 can sync straight to the desktop app.
+## Bundled CalDAV server ("self-contained" variant) — THE headline goal
+- Product vision: a plug-and-play replacement for Google/Apple/Microsoft
+  calendar-tasks-contacts for people with NO self-hosting experience, on the computer
+  they already own. One installer, minimal setup, phone syncs to your own PC. The
+  differentiator isn't the server itself — it's the setup experience: install, the app
+  handles the firewall rule, generates the sync account, and shows a QR code / short URL
+  that configures DAVx5//Tasks.org on the phone. A tray icon shows "phone last synced
+  N minutes ago". Combined with Contacts/CardDAV (above), that covers tasks + calendar +
+  contacts — the core of what keeps people on big-tech accounts.
 - Candidates: **Radicale** (Python, tiny, easiest to embed), **Baïkal** (PHP, heavier),
   **xandikos** (Python, pure-Git storage). Radicale is the obvious first pick; an
   alternative is implementing a minimal CalDAV subset (PROPFIND/REPORT/PUT/DELETE on
@@ -49,10 +55,9 @@
   - auth (Radicale htpasswd or equivalent) and optionally a self-signed cert; DAVx5
     accepts plain HTTP on LAN with a warning
   - launch-on-boot + close-to-tray so quitting the window doesn't kill the server
-- **Docker deployment**: additionally, ship the server variant as a Docker image
-  (e.g. Radicale + a small web UI build of this app) with a compose file — for the
-  NAS/home-server audience that wants sync independent of any desktop PC. A different
-  audience than the embedded version, not a prerequisite for it.
+- **Docker deployment** (deprioritized): the docker-literate audience already has
+  Nextcloud/Radicale/Baïkal images; a compose file for our server variant is a
+  nice-to-have later, not a differentiator. The standalone embedded version comes first.
 
 ## Smaller items
 - Manual drag-to-reorder (sort_order already exists in DB + sync)
