@@ -4,6 +4,7 @@ import TaskTable from "./components/TaskTable";
 import DetailPanel from "./components/DetailPanel";
 import ContextMenu from "./components/ContextMenu";
 import SettingsModal from "./components/SettingsModal";
+import AboutModal from "./components/AboutModal";
 import { Task, TaskList, CaldavAccountPublic } from "./types";
 
 type Scope = string | "all" | "today";
@@ -34,6 +35,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [forceAddingList, setForceAddingList] = useState(false);
@@ -101,6 +103,7 @@ export default function App() {
       window.api.on("shortcut:focus-search", () => searchInputRef.current?.focus()),
       window.api.on("shortcut:sync-now", () => runSync()),
       window.api.on("shortcut:open-settings", () => setShowSettings(true)),
+      window.api.on("shortcut:open-about", () => setShowAbout(true)),
       window.api.on("notify:select-task", (id: string) => { setScope("all"); setSelectedTaskId(id); })
     ];
     return () => offs.forEach((off) => off());
@@ -546,6 +549,8 @@ export default function App() {
           onSyncAccount={syncAccountNow}
         />
       )}
+
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
     </div>
   );
 }

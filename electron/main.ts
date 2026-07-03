@@ -205,7 +205,12 @@ function buildMenu() {
         { role: "cut" },
         { role: "copy" },
         { role: "paste" },
-        { role: "selectAll" }
+        { role: "selectAll" },
+        { type: "separator" },
+        {
+          label: "Settings…",
+          click: () => mainWindow?.webContents.send("shortcut:open-settings")
+        }
       ]
     },
     {
@@ -218,7 +223,12 @@ function buildMenu() {
         },
         { type: "separator" },
         { role: "reload" },
-        { role: "toggleDevTools" }
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        {
+          label: "About Tasks Desktop",
+          click: () => mainWindow?.webContents.send("shortcut:open-about")
+        }
       ]
     },
     {

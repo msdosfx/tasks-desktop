@@ -1,4 +1,5 @@
 * { box-sizing: border-box; }
+:root { color-scheme: dark; }
 html, body, #root { height: 100%; margin: 0; overflow: hidden; }
 body {
   font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -219,7 +220,7 @@ input, textarea, select { user-select: text; }
 .detail-panel { display: flex; flex-direction: column; padding: 16px; overflow-y: auto; min-height: 0; }
 .detail-panel h3 { margin: 0 0 12px; font-size: 14px; }
 .detail-panel label { display: block; font-size: 11px; color: #9aa0a6; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: .03em; }
-.detail-panel input[type="text"], .detail-panel textarea, .detail-panel select, .detail-panel input[type="date"], .detail-panel input[type="datetime-local"] {
+.detail-panel input[type="text"], .detail-panel textarea, .detail-panel select, .detail-panel input[type="date"], .detail-panel input[type="time"], .detail-panel input[type="datetime-local"] {
   width: 100%;
   background: #26272a;
   border: 1px solid #34353a;
@@ -323,9 +324,15 @@ input, textarea, select { user-select: text; }
   padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12px;
 }
 
-.date-time-pair { display: flex; gap: 6px; }
-.date-time-pair input[type="date"] { flex: 1; min-width: 0; }
-.date-time-pair input[type="time"] { width: 92px; flex-shrink: 0; }
+.about-modal { max-width: 460px; }
+.about-version { font-size: 13px; color: #9aa0a6; margin: 4px 0 12px; }
+.about-license { font-size: 12px; color: #c7cbd1; line-height: 1.5; }
+.about-license p { margin: 0 0 10px; }
+.about-license a { color: #4a90d9; }
+
+.date-time-pair { display: flex; flex-direction: column; gap: 6px; }
+.date-time-pair input[type="date"] { width: 100%; min-width: 0; }
+.date-time-pair input[type="time"] { width: 100%; }
 
 /* ---------- Smart filters & manual sort ---------- */
 .sidebar-section-label {
