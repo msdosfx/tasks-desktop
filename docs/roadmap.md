@@ -39,14 +39,20 @@
   **xandikos** (Python, pure-Git storage). Radicale is the obvious first pick; an
   alternative is implementing a minimal CalDAV subset (PROPFIND/REPORT/PUT/DELETE on
   VTODOs) directly in the Electron main process, since we already have tsdav + ical.js.
-- Open questions: how phones reach it (LAN discovery? static IP? TLS?), auth story,
-  whether it runs only while the app is open, and whether that's acceptable for DAVx5's
-  periodic sync.
-- **Docker deployment**: ship the server variant as a Docker image (e.g. Radicale + a
-  small web UI build of this app) with a compose file — for users with a NAS/home server
-  who want always-on sync independent of the desktop app being open. This sidesteps the
-  "only runs while the app is open" problem above and is probably the more realistic
-  first shipping form of the server idea.
+- Intermittent availability is a NON-issue: CalDAV clients (DAVx5, Tasks.org) queue
+  local changes and simply retry when the server is reachable again — same pattern as a
+  NAS that sleeps overnight. A desktop set to launch on boot is plenty. The embedded
+  server is therefore viable as-is; what it actually needs is plumbing:
+  - stable LAN address for the phone to target (DHCP reservation or hostname)
+  - Windows Firewall / firewalld inbound rule for the chosen port (installer or
+    first-run prompt should handle this)
+  - auth (Radicale htpasswd or equivalent) and optionally a self-signed cert; DAVx5
+    accepts plain HTTP on LAN with a warning
+  - launch-on-boot + close-to-tray so quitting the window doesn't kill the server
+- **Docker deployment**: additionally, ship the server variant as a Docker image
+  (e.g. Radicale + a small web UI build of this app) with a compose file — for the
+  NAS/home-server audience that wants sync independent of any desktop PC. A different
+  audience than the embedded version, not a prerequisite for it.
 
 ## Smaller items
 - Manual drag-to-reorder (sort_order already exists in DB + sync)
