@@ -50,7 +50,9 @@ remove with `flatpak uninstall com.arlis.tasksdesktop`.
 
 ### macOS (.dmg)
 
-The dmg is built for Apple Silicon (arm64). Open it and drag **Tasks Desktop** into **Applications**. The build is not code-signed, so the
+Two dmgs are published: `arm64` for Apple Silicon (M1 and later) and `x64` for Intel Macs — pick the
+one matching your machine (About This Mac shows which chip you have). Open it and drag **Tasks Desktop**
+into **Applications**. The build is not code-signed, so the
 first launch will be blocked by Gatekeeper — right-click (or Ctrl-click) the app in Applications and
 choose **Open**, then confirm. This is only needed once. Update by installing a newer .dmg over the old
 copy; remove by deleting the app from Applications.
