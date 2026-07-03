@@ -1,6 +1,6 @@
 {
   "name": "tasks-desktop",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "A non-touch, mouse/keyboard-first desktop app with Tasks.org-compatible features and CalDAV sync.",
   "author": "Arlis <remindful_boogeyman454@simplelogin.com>",
   "main": "dist-electron/main.js",
