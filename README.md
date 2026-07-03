@@ -5,6 +5,56 @@ A non-touch, mouse-and-keyboard desktop app that reimplements the core functiona
 Electron + React + TypeScript app, with two-way CalDAV sync so it can share data with your existing
 Tasks.org mobile setup (DAVx5 / Nextcloud / any Tasks.org-compatible CalDAV server).
 
+## Installation
+
+Grab the latest build for your platform from the
+[Releases page](https://github.com/msdosfx/tasks-desktop/releases/latest).
+
+### Windows (.exe)
+
+Download `Tasks Desktop Setup x.y.z.exe` and run it. It installs per-user (no admin prompt) and
+**automatically replaces any previously installed version** — settings and your task database are kept.
+To remove the app: Windows Settings → Apps → Installed apps → Tasks Desktop → Uninstall.
+
+From v0.1.9 onward the Windows app updates itself: it checks this repo's releases on startup, downloads
+the new version in the background, and offers "Restart to update" in Settings, so you only ever need to
+download the installer once.
+
+### Debian / Ubuntu (.deb)
+
+```bash
+sudo apt install ./tasks-desktop_x.y.z_amd64.deb
+```
+
+`apt` resolves the dependencies automatically (plain `dpkg -i` works too, followed by
+`sudo apt -f install` if it complains). Launch from your app menu, or run `tasks-desktop`.
+Update by installing a newer .deb the same way; remove with `sudo apt remove tasks-desktop`.
+
+### Flatpak (.flatpak)
+
+A `.flatpak` bundle can't be launched directly — it must be installed with flatpak, and it needs the
+shared runtimes it was built against (one-time setup):
+
+```bash
+# one-time: add Flathub and install the runtimes
+flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+flatpak install flathub org.freedesktop.Platform//24.08 org.electronjs.Electron2.BaseApp//24.08
+
+# install and run the bundle
+flatpak install "./Tasks Desktop-x.y.z-x86_64.flatpak"
+flatpak run com.arlis.tasksdesktop
+```
+
+After that it appears in your app menu like any other app. Update by installing a newer bundle over it;
+remove with `flatpak uninstall com.arlis.tasksdesktop`.
+
+### macOS (.dmg)
+
+The dmg is built for Apple Silicon (arm64). Open it and drag **Tasks Desktop** into **Applications**. The build is not code-signed, so the
+first launch will be blocked by Gatekeeper — right-click (or Ctrl-click) the app in Applications and
+choose **Open**, then confirm. This is only needed once. Update by installing a newer .dmg over the old
+copy; remove by deleting the app from Applications.
+
 ## Stack
 - Electron (main process) + Node's built-in `node:sqlite` for local storage (no native compiler required)
 - React + TypeScript (renderer), built with Vite
@@ -42,7 +92,7 @@ npm run dev:electron
 
 ```bash
 npm start      # build renderer + electron main, then launch
-npm run package  # build + bundle as a DMG/NSIS/AppImage via electron-builder
+npm run package  # build + bundle as DMG / NSIS installer / deb + flatpak via electron-builder
 ```
 
 ## Features implemented
@@ -64,7 +114,8 @@ npm run package  # build + bundle as a DMG/NSIS/AppImage via electron-builder
   needs fixing.
 - Recurrence is stored as an RRULE string but completing a recurring task does not yet auto-generate the
   next occurrence — that's the next logical feature to add.
-- Sync conflict resolution is "last write wins" by etag comparison; no merge UI for conflicts yet.
+- Sync conflicts (same task edited on two devices between syncs) keep the server version on the synced
+  task and preserve the local edits as a "(conflicted copy)" task; there's no merge UI yet.
 - Only one level of subtasks is modeled (no infinitely nested subtasks).
 - No notifications/reminders yet (Tasks.org supports local notifications; this would need
   `Notification` API + a due-date scheduler in the main process).
