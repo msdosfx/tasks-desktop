@@ -114,6 +114,20 @@ export default function App() {
         return true;
       });
     }
+    // Priority floats tasks to the top: high, medium, low, then no priority.
+    // Completed tasks sink to the bottom; due date then title break ties.
+    const prioRank: Record<number, number> = { 1: 0, 5: 1, 9: 2, 0: 3 };
+    base = [...base].sort((a, b) => {
+      if (!!a.completed !== !!b.completed) return a.completed ? 1 : -1;
+      const pr = (prioRank[a.priority] ?? 3) - (prioRank[b.priority] ?? 3);
+      if (pr !== 0) return pr;
+      if (a.due_date !== b.due_date) {
+        if (!a.due_date) return 1;
+        if (!b.due_date) return -1;
+        return a.due_date < b.due_date ? -1 : 1;
+      }
+      return a.title.localeCompare(b.title);
+    });
     return base;
   }, [tasks, scope, search, hideCompleted, dueFilter, categoryFilter]);
 

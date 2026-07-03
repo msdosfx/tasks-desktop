@@ -34,6 +34,8 @@ export interface Task {
   caldav_href: string | null;
   caldav_etag: string | null;
   deleted: 0 | 1;
+  /** 1 = has local edits not yet pushed to the CalDAV server */
+  dirty: 0 | 1;
   created_at: string;
   updated_at: string;
 }
@@ -98,6 +100,7 @@ function migrate(db: DatabaseSync) {
       caldav_href TEXT,
       caldav_etag TEXT,
       deleted INTEGER NOT NULL DEFAULT 0,
+      dirty INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (list_id) REFERENCES lists(id) ON DELETE CASCADE
@@ -118,6 +121,9 @@ function migrate(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS idx_tasks_list ON tasks(list_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
   `);
+
+  // Older databases predate the dirty column.
+  try { db.exec(`ALTER TABLE tasks ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
 
   const listCount = db.prepare("SELECT COUNT(*) AS c FROM lists").get() as { c: number };
   if (listCount.c === 0) {
@@ -195,8 +201,8 @@ export function taskCreate(input: Partial<Task> & { list_id: string; title: stri
     db.prepare(`SELECT COALESCE(MAX(sort_order), -1) AS m FROM tasks WHERE list_id = ?`).get(input.list_id) as any
   ).m as number;
   db.prepare(
-    `INSERT INTO tasks (id, list_id, parent_id, title, notes, due_date, start_date, priority, completed, completed_at, recurrence, tags, sort_order, caldav_uid, caldav_href, caldav_etag, deleted, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+    `INSERT INTO tasks (id, list_id, parent_id, title, notes, due_date, start_date, priority, completed, completed_at, recurrence, tags, sort_order, caldav_uid, caldav_href, caldav_etag, deleted, dirty, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
   ).run(
     id,
     input.list_id,
@@ -214,6 +220,9 @@ export function taskCreate(input: Partial<Task> & { list_id: string; title: stri
     input.caldav_uid ?? null,
     input.caldav_href ?? null,
     input.caldav_etag ?? null,
+    // Sync-created tasks (they arrive with a CalDAV UID) are already on the
+    // server; anything else is a local creation that still needs pushing.
+    input.dirty ?? (input.caldav_uid ? 0 : 1),
     now,
     now
   );
@@ -224,11 +233,16 @@ export function taskUpdate(id: string, patch: Partial<Task>): Task {
   const db = getDb();
   const current = taskGet(id);
   if (!current) throw new Error("Task not found");
-  const merged: Task = { ...current, ...patch, updated_at: nowIso() };
+  // Updates that carry caldav_etag come from the sync engine (applying remote
+  // state or recording a successful push) -- they leave the task clean. Any
+  // other update is a user edit that must be pushed on the next sync.
+  const isSyncUpdate = Object.prototype.hasOwnProperty.call(patch, "caldav_etag");
+  const dirty: 0 | 1 = patch.dirty !== undefined ? patch.dirty : isSyncUpdate ? 0 : 1;
+  const merged: Task = { ...current, ...patch, dirty, updated_at: nowIso() };
   db.prepare(
     `UPDATE tasks SET list_id=?, parent_id=?, title=?, notes=?, due_date=?, start_date=?,
      priority=?, completed=?, completed_at=?, recurrence=?, tags=?, sort_order=?,
-     caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, updated_at=?
+     caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, updated_at=?
      WHERE id=?`
   ).run(
     merged.list_id,
@@ -247,6 +261,7 @@ export function taskUpdate(id: string, patch: Partial<Task>): Task {
     merged.caldav_href,
     merged.caldav_etag,
     merged.deleted,
+    merged.dirty,
     merged.updated_at,
     id
   );

@@ -225,6 +225,23 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
         });
         result.pulled++;
       } else if (local.caldav_etag !== remote.etag) {
+        if (local.dirty) {
+          // Both sides changed since the last sync: remote wins on the synced
+          // task, local edits survive as a new unsynced task pushed below.
+          await taskCreate({
+            list_id: list.id,
+            parent_id: local.parent_id,
+            title: `${local.title} (conflicted copy)`,
+            notes: local.notes,
+            due_date: local.due_date,
+            start_date: local.start_date,
+            priority: local.priority,
+            completed: local.completed,
+            completed_at: local.completed_at,
+            recurrence: local.recurrence,
+            tags: local.tags
+          });
+        }
         await taskUpdate(local.id, {
           title: parsed.title,
           notes: parsed.notes,
@@ -266,6 +283,9 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
           result.errors.push(`Create failed for "${local.title}": ${err?.message || err}`);
         }
       } else {
+        // Only push tasks with local edits; re-uploading unchanged tasks
+        // churns etags and makes other devices clobber their pending edits.
+        if (!local.dirty) continue;
         const remote = remoteByUid.get(local.caldav_uid);
         const remoteEtag = remote?.etag ?? null;
         if (remoteEtag !== local.caldav_etag) continue;

@@ -224,6 +224,25 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
         });
         result.pulled++;
       } else if (local.caldav_etag !== remote.etag) {
+        if (local.dirty) {
+          // Both sides changed since the last sync. The remote version wins on
+          // the synced task, but the local edits are preserved as a new,
+          // unsynced task (which the push phase below uploads), so neither
+          // side's work is silently lost.
+          taskCreate({
+            list_id: list.id,
+            parent_id: local.parent_id,
+            title: `${local.title} (conflicted copy)`,
+            notes: local.notes,
+            due_date: local.due_date,
+            start_date: local.start_date,
+            priority: local.priority,
+            completed: local.completed,
+            completed_at: local.completed_at,
+            recurrence: local.recurrence,
+            tags: local.tags
+          });
+        }
         taskUpdate(local.id, {
           title: parsed.title,
           notes: parsed.notes,
@@ -265,6 +284,11 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
           result.errors.push(`Create failed for "${local.title}": ${err?.message || err}`);
         }
       } else {
+        // Only push tasks the user actually changed since the last sync.
+        // Re-uploading unchanged tasks churns server etags, which makes every
+        // OTHER device see a phantom "remote change" and clobber its own
+        // pending local edits with stale data.
+        if (!local.dirty) continue;
         const remote = remoteByUid.get(local.caldav_uid);
         const remoteEtag = remote?.etag ?? null;
         if (remoteEtag !== local.caldav_etag) continue; // pulled this round already, skip pushing stale copy

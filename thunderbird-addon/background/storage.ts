@@ -130,6 +130,7 @@ function migrate(db: DatabaseAdapter) {
       caldav_href TEXT,
       caldav_etag TEXT,
       deleted INTEGER NOT NULL DEFAULT 0,
+      dirty INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -149,6 +150,9 @@ function migrate(db: DatabaseAdapter) {
     CREATE INDEX IF NOT EXISTS idx_tasks_list ON tasks(list_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
   `);
+
+  // Older databases predate the dirty column.
+  try { db.exec(`ALTER TABLE tasks ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
 
   const listCount = db.prepare(`SELECT COUNT(*) AS c FROM lists`).get() as { c: number };
   if (listCount.c === 0) {

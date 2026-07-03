@@ -35,6 +35,8 @@ export interface Task {
   caldav_href: string | null;
   caldav_etag: string | null;
   deleted: 0 | 1;
+  /** 1 = has local edits not yet pushed to the CalDAV server */
+  dirty: 0 | 1;
   created_at: string;
   updated_at: string;
 }
@@ -125,8 +127,8 @@ export async function taskCreate(input: Partial<Task> & { list_id: string; title
     db.prepare(`SELECT COALESCE(MAX(sort_order), -1) AS m FROM tasks WHERE list_id = ?`).get(input.list_id) as any
   ).m as number;
   db.prepare(
-    `INSERT INTO tasks (id, list_id, parent_id, title, notes, due_date, start_date, priority, completed, completed_at, recurrence, tags, sort_order, caldav_uid, caldav_href, caldav_etag, deleted, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+    `INSERT INTO tasks (id, list_id, parent_id, title, notes, due_date, start_date, priority, completed, completed_at, recurrence, tags, sort_order, caldav_uid, caldav_href, caldav_etag, deleted, dirty, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
   ).run(
     id,
     input.list_id,
@@ -144,6 +146,7 @@ export async function taskCreate(input: Partial<Task> & { list_id: string; title
     input.caldav_uid ?? null,
     input.caldav_href ?? null,
     input.caldav_etag ?? null,
+    input.dirty ?? (input.caldav_uid ? 0 : 1),
     now,
     now
   );
@@ -155,11 +158,13 @@ export async function taskUpdate(id: string, patch: Partial<Task>): Promise<Task
   const db = await getDb();
   const current = await taskGet(id);
   if (!current) throw new Error("Task not found");
-  const merged: Task = { ...current, ...patch, updated_at: nowIso() };
+  const isSyncUpdate = Object.prototype.hasOwnProperty.call(patch, "caldav_etag");
+  const dirty: 0 | 1 = patch.dirty !== undefined ? patch.dirty : isSyncUpdate ? 0 : 1;
+  const merged: Task = { ...current, ...patch, dirty, updated_at: nowIso() };
   db.prepare(
     `UPDATE tasks SET list_id=?, parent_id=?, title=?, notes=?, due_date=?, start_date=?,
      priority=?, completed=?, completed_at=?, recurrence=?, tags=?, sort_order=?,
-     caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, updated_at=?
+     caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, updated_at=?
      WHERE id=?`
   ).run(
     merged.list_id,
@@ -178,6 +183,7 @@ export async function taskUpdate(id: string, patch: Partial<Task>): Promise<Task
     merged.caldav_href,
     merged.caldav_etag,
     merged.deleted,
+    merged.dirty,
     merged.updated_at,
     id
   );

@@ -28,6 +28,7 @@ export interface Task {
   caldav_href: string | null;
   caldav_etag: string | null;
   deleted: 0 | 1;
+  dirty?: 0 | 1;
   created_at: string;
   updated_at: string;
 }
