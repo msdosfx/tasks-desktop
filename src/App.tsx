@@ -23,6 +23,7 @@ export default function App() {
   const [hideCompleted, setHideCompleted] = useState(() => localStorage.getItem("hideCompleted") === "1");
   const [dueFilter, setDueFilter] = useState<"all" | "today" | "week" | "month">("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [showScheduled, setShowScheduled] = useState(false);
 
   useEffect(() => {
     localStorage.setItem("hideCompleted", hideCompleted ? "1" : "0");
@@ -93,6 +94,17 @@ export default function App() {
     if (hideCompleted) {
       base = base.filter((t) => !t.completed);
     }
+    if (!showScheduled) {
+      // "Hide until": tasks whose start date hasn't arrived stay out of sight
+      // (Tasks.org behavior). Toggle "Show scheduled" to reveal them.
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      base = base.filter((t) => {
+        if (!t.start_date || t.completed) return true;
+        return t.start_date.length <= 10 ? t.start_date <= today : new Date(t.start_date) <= now;
+      });
+    }
     if (categoryFilter !== "all" && scope !== "today") {
       base = base.filter((t) => {
         const cats = (t.tags || "").split(",").map((c) => c.trim()).filter(Boolean);
@@ -129,7 +141,7 @@ export default function App() {
       return a.title.localeCompare(b.title);
     });
     return base;
-  }, [tasks, scope, search, hideCompleted, dueFilter, categoryFilter]);
+  }, [tasks, scope, search, hideCompleted, dueFilter, categoryFilter, showScheduled]);
 
   const allCategories = useMemo(() => {
     const seen = new Set<string>();
@@ -339,6 +351,10 @@ export default function App() {
           <label className="hide-completed-toggle">
             <input type="checkbox" checked={hideCompleted} onChange={(e) => setHideCompleted(e.target.checked)} />
             Hide completed
+          </label>
+          <label className="hide-completed-toggle" title="Show tasks whose start date is still in the future">
+            <input type="checkbox" checked={showScheduled} onChange={(e) => setShowScheduled(e.target.checked)} />
+            Show scheduled
           </label>
         </div>
         {syncMsg && <div style={{ padding: "4px 16px", fontSize: 12, color: "#9aa0a6" }}>{syncMsg}</div>}

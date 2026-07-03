@@ -3,6 +3,7 @@
 // async because sql.js/IndexedDB init is async, and (b) every mutation
 // calls persist() before returning so the IndexedDB copy never falls behind.
 import { nanoid } from "nanoid";
+import { RRule } from "rrule";
 import { getDb, persist } from "./storage";
 
 export interface TaskList {
@@ -191,9 +192,35 @@ export async function taskUpdate(id: string, patch: Partial<Task>): Promise<Task
   return (await taskGet(id))!;
 }
 
+function nextOccurrence(rruleStr: string, due: string): string | null {
+  try {
+    const dateOnly = due.length <= 10;
+    const dtstart = new Date(dateOnly ? `${due}T00:00:00Z` : due);
+    const rule = new RRule({ ...RRule.parseString(rruleStr), dtstart });
+    const next = rule.after(dtstart, false);
+    if (!next) return null;
+    return dateOnly ? next.toISOString().slice(0, 10) : next.toISOString();
+  } catch {
+    return null;
+  }
+}
+
 export async function taskToggleComplete(id: string): Promise<Task> {
   const t = await taskGet(id);
   if (!t) throw new Error("Task not found");
+  // Completing a recurring task reschedules it (Tasks.org behavior).
+  if (!t.completed && t.recurrence && t.due_date) {
+    const next = nextOccurrence(t.recurrence, t.due_date);
+    if (next) {
+      const patch: Partial<Task> = { due_date: next };
+      if (t.start_date) {
+        const offset = new Date(t.due_date).getTime() - new Date(t.start_date).getTime();
+        const newStart = new Date(new Date(next.length <= 10 ? `${next}T00:00:00Z` : next).getTime() - offset);
+        patch.start_date = t.start_date.length <= 10 ? newStart.toISOString().slice(0, 10) : newStart.toISOString();
+      }
+      return taskUpdate(id, patch);
+    }
+  }
   const completed = t.completed ? 0 : 1;
   return taskUpdate(id, { completed, completed_at: completed ? nowIso() : null } as Partial<Task>);
 }

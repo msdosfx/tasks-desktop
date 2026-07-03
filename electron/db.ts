@@ -1,4 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
+// Default-import + destructure: rrule's Node entry is a UMD/CJS bundle whose
+// named exports aren't statically detectable by Node's ESM interop.
+import rrulePkg from "rrule";
+const { RRule } = rrulePkg;
 import { app } from "electron";
 import path from "node:path";
 import fs from "node:fs";
@@ -268,9 +272,41 @@ export function taskUpdate(id: string, patch: Partial<Task>): Task {
   return taskGet(id)!;
 }
 
+/** Next occurrence strictly after `due` per the task's RRULE, in the same
+ *  format as the input (date-only stays date-only). Null when the rule is
+ *  exhausted (COUNT/UNTIL) or malformed. */
+function nextOccurrence(rruleStr: string, due: string): string | null {
+  try {
+    const dateOnly = due.length <= 10;
+    const dtstart = new Date(dateOnly ? `${due}T00:00:00Z` : due);
+    const rule = new RRule({ ...RRule.parseString(rruleStr), dtstart });
+    const next = rule.after(dtstart, false);
+    if (!next) return null;
+    return dateOnly ? next.toISOString().slice(0, 10) : next.toISOString();
+  } catch {
+    return null;
+  }
+}
+
 export function taskToggleComplete(id: string): Task {
   const t = taskGet(id);
   if (!t) throw new Error("Task not found");
+  // Completing a recurring task reschedules it to the next occurrence instead
+  // of completing it (Tasks.org behavior). Once the rule runs out, it
+  // completes like a normal task. Un-completing is always a plain toggle.
+  if (!t.completed && t.recurrence && t.due_date) {
+    const next = nextOccurrence(t.recurrence, t.due_date);
+    if (next) {
+      const patch: Partial<Task> = { due_date: next };
+      if (t.start_date) {
+        // Keep the start date the same distance ahead of the new due date.
+        const offset = new Date(t.due_date).getTime() - new Date(t.start_date).getTime();
+        const newStart = new Date(new Date(next.length <= 10 ? `${next}T00:00:00Z` : next).getTime() - offset);
+        patch.start_date = t.start_date.length <= 10 ? newStart.toISOString().slice(0, 10) : newStart.toISOString();
+      }
+      return taskUpdate(id, patch);
+    }
+  }
   const completed = t.completed ? 0 : 1;
   return taskUpdate(id, { completed, completed_at: completed ? nowIso() : null } as Partial<Task>);
 }

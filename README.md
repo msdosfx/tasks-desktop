@@ -114,8 +114,6 @@ npm run package  # build + bundle as DMG / NSIS installer / deb + flatpak via el
 - Built and reviewed by hand without network access to `npm install` or run Electron, so treat the first
   run as a shakeout — check the terminal for TypeScript or runtime errors and report back anything that
   needs fixing.
-- Recurrence is stored as an RRULE string but completing a recurring task does not yet auto-generate the
-  next occurrence — that's the next logical feature to add.
 - Sync conflicts (same task edited on two devices between syncs) keep the server version on the synced
   task and preserve the local edits as a "(conflicted copy)" task; there's no merge UI yet.
 - Only one level of subtasks is modeled (no infinitely nested subtasks).
