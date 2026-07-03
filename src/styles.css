@@ -326,3 +326,32 @@ input, textarea, select { user-select: text; }
 .date-time-pair { display: flex; gap: 6px; }
 .date-time-pair input[type="date"] { flex: 1; min-width: 0; }
 .date-time-pair input[type="time"] { width: 92px; flex-shrink: 0; }
+
+/* ---------- Smart filters & manual sort ---------- */
+.sidebar-section-label {
+  padding: 2px 14px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6f7378;
+}
+.smart-filter-delete {
+  background: transparent; border: none; color: #6f7378;
+  font-size: 14px; line-height: 1; cursor: pointer; padding: 0 2px;
+  visibility: hidden;
+}
+.sidebar-item.smart-filter:hover .smart-filter-delete { visibility: visible; }
+.smart-filter-delete:hover { color: #e5484d; }
+.save-view-btn {
+  background: transparent; border: 1px dashed #3a3b3f; color: #9aa0a6;
+  border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+  flex: 0 0 auto; white-space: nowrap;
+}
+.save-view-btn:hover { background: #232326; color: #fff; }
+.save-view-input {
+  background: #26272a; border: 1px solid #4a90d9; border-radius: 6px;
+  padding: 4px 8px; color: #e6e6e6; font-size: 12px; width: 160px;
+}
+.task-row.drag-over { border-top: 2px solid #4a90d9; }
+.task-row[draggable="true"] { cursor: grab; }

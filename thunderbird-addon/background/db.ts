@@ -160,7 +160,14 @@ export async function taskUpdate(id: string, patch: Partial<Task>): Promise<Task
   const current = await taskGet(id);
   if (!current) throw new Error("Task not found");
   const isSyncUpdate = Object.prototype.hasOwnProperty.call(patch, "caldav_etag");
-  const dirty: 0 | 1 = patch.dirty !== undefined ? patch.dirty : isSyncUpdate ? 0 : 1;
+  // sort_order isn't synced to CalDAV, so reordering alone must not mark the
+  // task dirty (that would re-push unchanged content and churn server etags).
+  const syncIrrelevant = Object.keys(patch).every((k) => k === "sort_order");
+  let dirty: 0 | 1;
+  if (patch.dirty !== undefined) dirty = patch.dirty;
+  else if (isSyncUpdate) dirty = 0;
+  else if (syncIrrelevant) dirty = current.dirty;
+  else dirty = 1;
   const merged: Task = { ...current, ...patch, dirty, updated_at: nowIso() };
   db.prepare(
     `UPDATE tasks SET list_id=?, parent_id=?, title=?, notes=?, due_date=?, start_date=?,

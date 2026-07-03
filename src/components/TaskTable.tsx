@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { Task, PRIORITY_COLORS } from "../types";
 
 interface Props {
@@ -7,6 +7,9 @@ interface Props {
   onSelect: (id: string) => void;
   onToggleComplete: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, taskId: string) => void;
+  /** Manual sort mode only: rows become draggable. */
+  dragEnabled?: boolean;
+  onReorder?: (draggedId: string, targetId: string) => void;
 }
 
 function formatDue(due: string | null): { text: string; overdue: boolean } | null {
@@ -22,9 +25,10 @@ function formatDue(due: string | null): { text: string; overdue: boolean } | nul
   return { text, overdue };
 }
 
-export default function TaskTable({ tasks, selectedTaskId, onSelect, onToggleComplete, onContextMenu }: Props) {
+export default function TaskTable({ tasks, selectedTaskId, onSelect, onToggleComplete, onContextMenu, dragEnabled = false, onReorder }: Props) {
   const topLevel = tasks.filter((t) => !t.parent_id);
   const childrenOf = (id: string) => tasks.filter((t) => t.parent_id === id);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   if (topLevel.length === 0) {
     return <div className="empty-state">No tasks here. Press Ctrl+N to add one.</div>;
@@ -36,9 +40,29 @@ export default function TaskTable({ tasks, selectedTaskId, onSelect, onToggleCom
     return (
       <React.Fragment key={t.id}>
         <div
-          className={`task-row ${depth > 0 ? "subtask" : ""} ${t.completed ? "completed" : ""} ${selectedTaskId === t.id ? "selected" : ""}`}
+          className={`task-row ${depth > 0 ? "subtask" : ""} ${t.completed ? "completed" : ""} ${selectedTaskId === t.id ? "selected" : ""} ${dragOverId === t.id ? "drag-over" : ""}`}
           onClick={() => onSelect(t.id)}
           onContextMenu={(e) => onContextMenu(e, t.id)}
+          draggable={dragEnabled}
+          onDragStart={(e) => {
+            if (!dragEnabled) return;
+            e.dataTransfer.setData("text/task-id", t.id);
+            e.dataTransfer.effectAllowed = "move";
+          }}
+          onDragOver={(e) => {
+            if (!dragEnabled) return;
+            e.preventDefault(); // required to allow dropping
+            setDragOverId(t.id);
+          }}
+          onDragLeave={() => setDragOverId((cur) => (cur === t.id ? null : cur))}
+          onDrop={(e) => {
+            if (!dragEnabled) return;
+            e.preventDefault();
+            setDragOverId(null);
+            const draggedId = e.dataTransfer.getData("text/task-id");
+            if (draggedId && draggedId !== t.id) onReorder?.(draggedId, t.id);
+          }}
+          onDragEnd={() => setDragOverId(null)}
         >
           <span
             className={`checkbox ${t.completed ? "done" : ""}`}

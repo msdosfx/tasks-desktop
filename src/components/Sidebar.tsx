@@ -2,6 +2,11 @@ import React, { useState, useEffect } from "react";
 import { TaskList, Task } from "../types";
 import ContextMenu from "./ContextMenu";
 
+export interface SidebarSmartFilter {
+  id: string;
+  name: string;
+}
+
 interface Props {
   lists: TaskList[];
   tasks: Task[];
@@ -19,6 +24,9 @@ interface Props {
   onDeleteList: (id: string) => void;
   onRemoveList: (id: string) => void;
   onSyncList: (accountId: string) => void;
+  smartFilters?: SidebarSmartFilter[];
+  onApplyFilter?: (f: any) => void;
+  onDeleteFilter?: (id: string) => void;
 }
 
 export default function Sidebar({
@@ -37,7 +45,10 @@ export default function Sidebar({
   onForceAddingHandled,
   onDeleteList,
   onRemoveList,
-  onSyncList
+  onSyncList,
+  smartFilters = [],
+  onApplyFilter,
+  onDeleteFilter
 }: Props) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
@@ -88,6 +99,23 @@ export default function Sidebar({
           <span className="sidebar-dot" style={{ background: "#888" }} />
           <span>All Tasks</span>
         </div>
+        {smartFilters.length > 0 && (
+          <>
+            <div style={{ height: 8 }} />
+            <div className="sidebar-section-label">Filters</div>
+            {smartFilters.map((f) => (
+              <div key={f.id} className="sidebar-item smart-filter" onClick={() => onApplyFilter?.(f)} title="Apply this saved view">
+                <span className="sidebar-dot" style={{ background: "#7c6fd0" }} />
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</span>
+                <button
+                  className="smart-filter-delete"
+                  title="Delete filter"
+                  onClick={(e) => { e.stopPropagation(); onDeleteFilter?.(f.id); }}
+                >×</button>
+              </div>
+            ))}
+          </>
+        )}
         <div style={{ height: 8 }} />
         {lists.map((l) => (
           <div

@@ -7,6 +7,23 @@ import SettingsModal from "./components/SettingsModal";
 import { Task, TaskList, CaldavAccountPublic } from "./types";
 
 type Scope = string | "all" | "today";
+type SortMode = "priority" | "due" | "title" | "manual";
+
+/** A saved view: every knob in the toolbar plus the selected scope. */
+interface SmartFilter {
+  id: string;
+  name: string;
+  scope: Scope;
+  search: string;
+  dueFilter: "all" | "today" | "week" | "month";
+  categoryFilter: string;
+  hideCompleted: boolean;
+  showScheduled: boolean;
+}
+
+function loadSmartFilters(): SmartFilter[] {
+  try { return JSON.parse(localStorage.getItem("smartFilters") || "[]"); } catch { return []; }
+}
 
 export default function App() {
   const [lists, setLists] = useState<TaskList[]>([]);
@@ -24,13 +41,50 @@ export default function App() {
   const [dueFilter, setDueFilter] = useState<"all" | "today" | "week" | "month">("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [showScheduled, setShowScheduled] = useState(false);
+  const [sortMode, setSortMode] = useState<SortMode>(() => (localStorage.getItem("sortMode") as SortMode) || "priority");
+  const [smartFilters, setSmartFilters] = useState<SmartFilter[]>(loadSmartFilters);
+  const [savingView, setSavingView] = useState(false);
+  const [viewName, setViewName] = useState("");
+  // Set while applying a smart filter so the scope-change effect below doesn't
+  // immediately wipe the filter values the smart filter just set.
+  const applyingFilterRef = React.useRef(false);
 
   useEffect(() => {
     localStorage.setItem("hideCompleted", hideCompleted ? "1" : "0");
   }, [hideCompleted]);
+  useEffect(() => {
+    localStorage.setItem("sortMode", sortMode);
+  }, [sortMode]);
+  useEffect(() => {
+    localStorage.setItem("smartFilters", JSON.stringify(smartFilters));
+  }, [smartFilters]);
 
   // Reset filters when switching lists
-  useEffect(() => { setDueFilter("all"); setCategoryFilter("all"); }, [scope]);
+  useEffect(() => {
+    if (applyingFilterRef.current) { applyingFilterRef.current = false; return; }
+    setDueFilter("all"); setCategoryFilter("all");
+  }, [scope]);
+
+  function applySmartFilter(f: SmartFilter) {
+    applyingFilterRef.current = true;
+    setScope(f.scope);
+    setSearch(f.search);
+    setDueFilter(f.dueFilter);
+    setCategoryFilter(f.categoryFilter);
+    setHideCompleted(f.hideCompleted);
+    setShowScheduled(f.showScheduled);
+  }
+
+  function saveCurrentView(name: string) {
+    const f: SmartFilter = {
+      id: String(Date.now()),
+      name: name.trim() || "Untitled filter",
+      scope, search, dueFilter, categoryFilter, hideCompleted, showScheduled
+    };
+    setSmartFilters((prev) => [...prev, f]);
+    setSavingView(false);
+    setViewName("");
+  }
 
   const searchInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -126,22 +180,28 @@ export default function App() {
         return true;
       });
     }
-    // Priority floats tasks to the top: high, medium, low, then no priority.
-    // Completed tasks sink to the bottom; due date then title break ties.
     const prioRank: Record<number, number> = { 1: 0, 5: 1, 9: 2, 0: 3 };
+    const byPriority = (a: Task, b: Task) => (prioRank[a.priority] ?? 3) - (prioRank[b.priority] ?? 3);
+    const byDue = (a: Task, b: Task) => {
+      if (a.due_date === b.due_date) return 0;
+      if (!a.due_date) return 1;
+      if (!b.due_date) return -1;
+      return a.due_date < b.due_date ? -1 : 1;
+    };
     base = [...base].sort((a, b) => {
+      if (sortMode === "manual") return a.sort_order - b.sort_order;
+      // Completed tasks sink to the bottom in every non-manual mode.
       if (!!a.completed !== !!b.completed) return a.completed ? 1 : -1;
-      const pr = (prioRank[a.priority] ?? 3) - (prioRank[b.priority] ?? 3);
-      if (pr !== 0) return pr;
-      if (a.due_date !== b.due_date) {
-        if (!a.due_date) return 1;
-        if (!b.due_date) return -1;
-        return a.due_date < b.due_date ? -1 : 1;
+      if (sortMode === "priority") {
+        return byPriority(a, b) || byDue(a, b) || a.title.localeCompare(b.title);
+      }
+      if (sortMode === "due") {
+        return byDue(a, b) || byPriority(a, b) || a.title.localeCompare(b.title);
       }
       return a.title.localeCompare(b.title);
     });
     return base;
-  }, [tasks, scope, search, hideCompleted, dueFilter, categoryFilter, showScheduled]);
+  }, [tasks, scope, search, hideCompleted, dueFilter, categoryFilter, showScheduled, sortMode]);
 
   const allCategories = useMemo(() => {
     const seen = new Set<string>();
@@ -168,6 +228,48 @@ export default function App() {
   function defaultListId(): string {
     if (typeof scope === "string" && scope !== "all" && scope !== "today") return scope;
     return lists[0]?.id;
+  }
+
+  /** Drop `draggedId` in front of `targetId` among its visible siblings and
+   *  renumber that sibling group. Only touches sort_order, which the DB layer
+   *  treats as sync-irrelevant (no dirty flag, nothing re-pushed to CalDAV). */
+  async function reorderTask(draggedId: string, targetId: string) {
+    const dragged = tasks.find((t) => t.id === draggedId);
+    const target = tasks.find((t) => t.id === targetId);
+    if (!dragged || !target || dragged.id === target.id) return;
+    if ((dragged.parent_id ?? null) !== (target.parent_id ?? null)) return; // siblings only
+    const siblings = visibleTasks.filter((t) => (t.parent_id ?? null) === (dragged.parent_id ?? null));
+    const ids = siblings.map((t) => t.id).filter((id) => id !== draggedId);
+    ids.splice(ids.indexOf(targetId), 0, draggedId);
+    await Promise.all(
+      ids.map((id, i) => {
+        const t = siblings.find((x) => x.id === id)!;
+        return t.sort_order === i ? Promise.resolve() : window.api.tasks.update(id, { sort_order: i } as Partial<Task>);
+      })
+    );
+    await loadTasks();
+  }
+
+  /** Pushes the due date forward. Timed tasks keep their clock time. */
+  async function snoozeTask(id: string, until: "tomorrow" | "3days" | "nextweek") {
+    const t = tasks.find((x) => x.id === id);
+    if (!t) return;
+    const now = new Date();
+    const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (until === "tomorrow") base.setDate(base.getDate() + 1);
+    else if (until === "3days") base.setDate(base.getDate() + 3);
+    else base.setDate(base.getDate() + ((8 - base.getDay()) % 7 || 7)); // next Monday
+    let due: string;
+    if (t.due_date && t.due_date.length > 10) {
+      const old = new Date(t.due_date);
+      base.setHours(old.getHours(), old.getMinutes(), 0, 0);
+      due = base.toISOString();
+    } else {
+      const pad = (n: number) => String(n).padStart(2, "0");
+      due = `${base.getFullYear()}-${pad(base.getMonth() + 1)}-${pad(base.getDate())}`;
+    }
+    await window.api.tasks.update(id, { due_date: due } as Partial<Task>);
+    await loadTasks();
   }
 
   async function createTaskInScope() {
@@ -309,6 +411,9 @@ export default function App() {
         syncMsg={syncMsg}
         forceAdding={forceAddingList}
         onForceAddingHandled={() => setForceAddingList(false)}
+        smartFilters={smartFilters}
+        onApplyFilter={applySmartFilter}
+        onDeleteFilter={(id) => setSmartFilters((prev) => prev.filter((f) => f.id !== id))}
       />
 
       <div className="main">
@@ -348,6 +453,17 @@ export default function App() {
               </select>
             )}
           </>)}
+          <select
+            className="due-filter-select"
+            value={sortMode}
+            title={sortMode === "manual" ? "Drag tasks to reorder them" : "Switch to Manual to drag-reorder tasks"}
+            onChange={(e) => setSortMode(e.target.value as SortMode)}
+          >
+            <option value="priority">Sort: Priority</option>
+            <option value="due">Sort: Due date</option>
+            <option value="title">Sort: Title</option>
+            <option value="manual">Sort: Manual</option>
+          </select>
           <label className="hide-completed-toggle">
             <input type="checkbox" checked={hideCompleted} onChange={(e) => setHideCompleted(e.target.checked)} />
             Hide completed
@@ -356,6 +472,23 @@ export default function App() {
             <input type="checkbox" checked={showScheduled} onChange={(e) => setShowScheduled(e.target.checked)} />
             Show scheduled
           </label>
+          {savingView ? (
+            <input
+              className="save-view-input"
+              autoFocus
+              placeholder="Filter name… (Enter)"
+              value={viewName}
+              onChange={(e) => setViewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveCurrentView(viewName);
+                if (e.key === "Escape") { setSavingView(false); setViewName(""); }
+              }}
+            />
+          ) : (
+            <button className="save-view-btn" title="Save the current scope, search, filters and toggles as a smart filter in the sidebar" onClick={() => setSavingView(true)}>
+              ☆ Save view
+            </button>
+          )}
         </div>
         {syncMsg && <div style={{ padding: "4px 16px", fontSize: 12, color: "#9aa0a6" }}>{syncMsg}</div>}
         <TaskTable
@@ -363,6 +496,8 @@ export default function App() {
           selectedTaskId={selectedTaskId}
           onSelect={setSelectedTaskId}
           onToggleComplete={toggleComplete}
+          dragEnabled={sortMode === "manual"}
+          onReorder={reorderTask}
           onContextMenu={(e, taskId) => {
             e.preventDefault();
             setSelectedTaskId(taskId);
@@ -390,6 +525,9 @@ export default function App() {
           onClose={() => setMenu(null)}
           items={[
             { label: "Mark complete / incomplete", onClick: () => toggleComplete(menu.taskId) },
+            { label: "Snooze until tomorrow", onClick: () => snoozeTask(menu.taskId, "tomorrow") },
+            { label: "Snooze 3 days", onClick: () => snoozeTask(menu.taskId, "3days") },
+            { label: "Snooze until next week", onClick: () => snoozeTask(menu.taskId, "nextweek") },
             { label: "Duplicate", onClick: async () => {
                 const t = tasks.find((x) => x.id === menu.taskId);
                 if (t) { await window.api.tasks.create({ list_id: t.list_id, title: `${t.title} (copy)`, notes: t.notes, due_date: t.due_date, priority: t.priority, tags: t.tags }); await loadTasks(); }
