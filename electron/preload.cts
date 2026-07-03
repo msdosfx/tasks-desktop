@@ -5,6 +5,10 @@ const api = {
     version: () => ipcRenderer.invoke("app:version"),
     installUpdate: () => ipcRenderer.invoke("update:install")
   },
+  settings: {
+    all: () => ipcRenderer.invoke("settings:all"),
+    set: (key: string, value: string) => ipcRenderer.invoke("settings:set", key, value)
+  },
   lists: {
     all: () => ipcRenderer.invoke("lists:all"),
     create: (name: string, color?: string) => ipcRenderer.invoke("lists:create", name, color),

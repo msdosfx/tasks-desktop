@@ -40,6 +40,8 @@ export interface Task {
   deleted: 0 | 1;
   /** 1 = has local edits not yet pushed to the CalDAV server */
   dirty: 0 | 1;
+  /** When a reminder notification was last fired for the current due_date. */
+  notified_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -105,6 +107,7 @@ function migrate(db: DatabaseSync) {
       caldav_etag TEXT,
       deleted INTEGER NOT NULL DEFAULT 0,
       dirty INTEGER NOT NULL DEFAULT 0,
+      notified_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (list_id) REFERENCES lists(id) ON DELETE CASCADE
@@ -122,12 +125,18 @@ function migrate(db: DatabaseSync) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tasks_list ON tasks(list_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
   `);
 
-  // Older databases predate the dirty column.
+  // Older databases predate these columns.
   try { db.exec(`ALTER TABLE tasks ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
+  try { db.exec(`ALTER TABLE tasks ADD COLUMN notified_at TEXT`); } catch { /* already present */ }
 
   const listCount = db.prepare("SELECT COUNT(*) AS c FROM lists").get() as { c: number };
   if (listCount.c === 0) {
@@ -250,10 +259,13 @@ export function taskUpdate(id: string, patch: Partial<Task>): Task {
   else if (syncIrrelevant) dirty = current.dirty;
   else dirty = 1;
   const merged: Task = { ...current, ...patch, dirty, updated_at: nowIso() };
+  // A new due date (edit, snooze, recurrence advance, or a change pulled from
+  // the server) gets a fresh reminder.
+  if (patch.due_date !== undefined && patch.due_date !== current.due_date) merged.notified_at = null;
   db.prepare(
     `UPDATE tasks SET list_id=?, parent_id=?, title=?, notes=?, due_date=?, start_date=?,
      priority=?, completed=?, completed_at=?, recurrence=?, tags=?, sort_order=?,
-     caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, updated_at=?
+     caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, notified_at=?, updated_at=?
      WHERE id=?`
   ).run(
     merged.list_id,
@@ -273,6 +285,7 @@ export function taskUpdate(id: string, patch: Partial<Task>): Task {
     merged.caldav_etag,
     merged.deleted,
     merged.dirty,
+    merged.notified_at,
     merged.updated_at,
     id
   );
@@ -372,4 +385,35 @@ export function accountDelete(id: string) {
   const db = getDb();
   db.prepare(`UPDATE lists SET caldav_account_id = NULL, caldav_calendar_url = NULL, caldav_ctag = NULL WHERE caldav_account_id = ?`).run(id);
   db.prepare(`DELETE FROM caldav_accounts WHERE id = ?`).run(id);
+}
+
+// ---------- Settings ----------
+export function settingsAll(): Record<string, string> {
+  const rows = getDb().prepare(`SELECT key, value FROM settings`).all() as { key: string; value: string }[];
+  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+}
+
+export function settingSet(key: string, value: string) {
+  getDb().prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value);
+}
+
+// ---------- Reminders ----------
+/** Open tasks whose reminder time has arrived and that haven't been notified
+ *  for their current due date. Timed tasks fire at their time; date-only tasks
+ *  fire at hh:mm (the user's default reminder time) on the due day. */
+export function tasksDueForNotification(hh: number, mm: number): Task[] {
+  const rows = getDb()
+    .prepare(`SELECT * FROM tasks WHERE deleted = 0 AND completed = 0 AND due_date IS NOT NULL AND notified_at IS NULL`)
+    .all() as unknown as Task[];
+  const now = new Date();
+  return rows.filter((t) => {
+    const due = t.due_date!;
+    const fireAt = new Date(due.length <= 10 ? `${due}T00:00:00` : due);
+    if (due.length <= 10) fireAt.setHours(hh, mm, 0, 0);
+    return fireAt <= now;
+  });
+}
+
+export function taskMarkNotified(id: string) {
+  getDb().prepare(`UPDATE tasks SET notified_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
 }

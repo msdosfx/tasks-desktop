@@ -74,6 +74,11 @@ declare global {
         version: () => Promise<string>;
         installUpdate: () => Promise<void>;
       };
+      /** Absent in the Thunderbird add-on shim -- always optional-chain. */
+      settings?: {
+        all: () => Promise<Record<string, string>>;
+        set: (key: string, value: string) => Promise<void>;
+      };
       lists: {
         all: () => Promise<TaskList[]>;
         create: (name: string, color?: string) => Promise<TaskList>;

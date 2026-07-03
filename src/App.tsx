@@ -100,7 +100,8 @@ export default function App() {
       window.api.on("shortcut:new-list", () => setForceAddingList(true)),
       window.api.on("shortcut:focus-search", () => searchInputRef.current?.focus()),
       window.api.on("shortcut:sync-now", () => runSync()),
-      window.api.on("shortcut:open-settings", () => setShowSettings(true))
+      window.api.on("shortcut:open-settings", () => setShowSettings(true)),
+      window.api.on("notify:select-task", (id: string) => { setScope("all"); setSelectedTaskId(id); })
     ];
     return () => offs.forEach((off) => off());
   }, []);

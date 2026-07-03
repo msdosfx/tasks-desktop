@@ -355,3 +355,15 @@ input, textarea, select { user-select: text; }
 }
 .task-row.drag-over { border-top: 2px solid #4a90d9; }
 .task-row[draggable="true"] { cursor: grab; }
+
+/* ---------- Preferences ---------- */
+.prefs-grid { display: flex; flex-direction: column; gap: 8px; }
+.pref-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: #c8c8c8; cursor: pointer;
+}
+.pref-row input[type="time"] {
+  background: #26272a; border: 1px solid #34353a; border-radius: 6px;
+  padding: 3px 6px; color: #e6e6e6; font-size: 12px;
+}
+.pref-indent { padding-left: 24px; color: #9aa0a6; }

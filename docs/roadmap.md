@@ -8,11 +8,11 @@
   version) speak CalDAV, so it may be able to point at the same CalDAV calendars this app
   syncs with, giving users a desktop calendar overlay for free without us building one.
 
-## Reminders / notifications
-- Main-process scheduler + Electron's native `Notification` API (Windows Action Center /
-  libnotify on Linux). Timed tasks fire at their time; date-only tasks at a configurable
-  default hour (Tasks.org uses 18:00). Needs "launch at login" + "close to tray" options
-  to be useful, since notifications only fire while the app runs.
+## Reminders / notifications — DONE (v0.1.12)
+- Shipped: minute-tick scheduler in the main process, native notifications (click
+  focuses the task), date-only tasks fire at a configurable time (default 18:00),
+  tray icon with close-to-tray, launch at login. Later: snooze buttons ON the
+  notification itself, repeating nags for overdue tasks.
 
 ## Lighter runtime than Electron
 - Revisit the earlier discussion about moving off Electron to something lighter.
@@ -60,6 +60,6 @@
   nice-to-have later, not a differentiator. The standalone embedded version comes first.
 
 ## Smaller items
-- Manual drag-to-reorder (sort_order already exists in DB + sync)
-- Saved filters / smart lists
-- Snooze / repeating reminders once notifications exist
+- ~~Manual drag-to-reorder~~ DONE (v0.1.11)
+- ~~Saved filters / smart lists~~ DONE (v0.1.11)
+- ~~Right-click snooze~~ DONE (v0.1.11); snooze buttons on notifications still open

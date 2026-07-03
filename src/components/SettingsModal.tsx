@@ -24,11 +24,18 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
   const [advancedLinking, setAdvancedLinking] = useState(() => localStorage.getItem("advancedListLinking") === "1");
   const [version, setVersion] = useState<string>("");
   const [update, setUpdate] = useState<{ state: string; detail?: any } | null>(null);
+  const [prefs, setPrefs] = useState<Record<string, string>>({});
 
   useEffect(() => {
     window.api.app?.version().then(setVersion).catch(() => {});
+    window.api.settings?.all().then(setPrefs).catch(() => {});
     return window.api.on("update:status", (state: string, detail?: any) => setUpdate({ state, detail }));
   }, []);
+
+  function setPref(key: string, value: string) {
+    setPrefs((prev) => ({ ...prev, [key]: value }));
+    window.api.settings?.set(key, value);
+  }
 
   useEffect(() => {
     localStorage.setItem("advancedListLinking", advancedLinking ? "1" : "0");
@@ -342,6 +349,47 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
           </div>
         </div>
         {testMsg && <p style={{ fontSize: 12, color: "#9aa0a6" }}>{testMsg}</p>}
+
+        {window.api.settings && (
+          <>
+            <h3 style={{ marginTop: 18 }}>Notifications &amp; startup</h3>
+            <div className="prefs-grid">
+              <label className="pref-row">
+                <input
+                  type="checkbox"
+                  checked={prefs.notificationsEnabled === "1"}
+                  onChange={(e) => setPref("notificationsEnabled", e.target.checked ? "1" : "0")}
+                />
+                Remind me when tasks are due
+              </label>
+              <label className="pref-row pref-indent" title="Tasks with a due time are reminded at that time; tasks with only a date are reminded at this time of day">
+                Remind date-only tasks at
+                <input
+                  type="time"
+                  value={prefs.reminderTime || "18:00"}
+                  disabled={prefs.notificationsEnabled !== "1"}
+                  onChange={(e) => setPref("reminderTime", e.target.value || "18:00")}
+                />
+              </label>
+              <label className="pref-row" title="Closing the window keeps the app in the tray so reminders and sync keep working">
+                <input
+                  type="checkbox"
+                  checked={prefs.closeToTray === "1"}
+                  onChange={(e) => setPref("closeToTray", e.target.checked ? "1" : "0")}
+                />
+                Keep running in the tray when the window is closed
+              </label>
+              <label className="pref-row">
+                <input
+                  type="checkbox"
+                  checked={prefs.launchAtLogin === "1"}
+                  onChange={(e) => setPref("launchAtLogin", e.target.checked ? "1" : "0")}
+                />
+                Start Tasks Desktop when the computer starts
+              </label>
+            </div>
+          </>
+        )}
 
         <div className="about-row">
           <span>Tasks Desktop{version ? ` v${version}` : ""}</span>
