@@ -12,13 +12,14 @@ Grab the latest build for your platform from the
 
 ### Windows (.exe)
 
-Download `Tasks Desktop Setup x.y.z.exe` and run it. It installs per-user (no admin prompt) and
+Download `tasks-desktop-Setup-x.y.z.exe` and run it. It installs per-user (no admin prompt) and
 **automatically replaces any previously installed version** — settings and your task database are kept.
 To remove the app: Windows Settings → Apps → Installed apps → Tasks Desktop → Uninstall.
 
-From v0.1.9 onward the Windows app updates itself: it checks this repo's releases on startup, downloads
+From v0.1.14 onward the Windows app updates itself: it checks this repo's releases on startup, downloads
 the new version in the background, and offers "Restart to update" in Settings, so you only ever need to
-download the installer once.
+download the installer once. (Versions 0.1.9–0.1.13 shipped with a broken update check — if you're on
+one of those, download and run the latest installer manually once; after that updates are automatic.)
 
 ### Debian / Ubuntu (.deb)
 
@@ -47,6 +48,11 @@ flatpak run com.arlis.tasksdesktop
 
 After that it appears in your app menu like any other app. Update by installing a newer bundle over it;
 remove with `flatpak uninstall com.arlis.tasksdesktop`.
+
+The bundle has no update channel, so `flatpak update` won't find new versions. The
+`scripts/update-tasksdesktop.sh` script downloads the latest release bundle and reinstalls it in one
+step — requires the [`gh` CLI](https://cli.github.com/), logged in. Copy it to `~/.local/bin` and run
+`update-tasksdesktop` whenever you want the newest version.
 
 ### macOS (.dmg)
 
@@ -111,9 +117,6 @@ npm run package  # build + bundle as DMG / NSIS installer / deb + flatpak via el
   new/changed local tasks to the server, and propagates local deletions
 
 ## Known limitations / next steps
-- Built and reviewed by hand without network access to `npm install` or run Electron, so treat the first
-  run as a shakeout — check the terminal for TypeScript or runtime errors and report back anything that
-  needs fixing.
 - Sync conflicts (same task edited on two devices between syncs) keep the server version on the synced
   task and preserve the local edits as a "(conflicted copy)" task; there's no merge UI yet.
 - Only one level of subtasks is modeled (no infinitely nested subtasks).

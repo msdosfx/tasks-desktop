@@ -40,7 +40,9 @@ const SETTING_DEFAULTS: Record<string, string> = {
   notificationsEnabled: "1",
   reminderTime: "18:00", // when date-only tasks fire
   closeToTray: "0", // off by default: the X button really quits; opt in via settings
-  launchAtLogin: "0"
+  launchAtLogin: "0",
+  syncIntervalMinutes: "5", // background auto-sync; "0" = manual only
+  syncHotkey: "CmdOrCtrl+R" // accelerator for Sync Now; "" = no hotkey
 };
 
 function getSetting(key: string): string {
@@ -229,7 +231,8 @@ function buildMenu() {
           click: () => mainWindow?.webContents.send("shortcut:focus-search")
         },
         { type: "separator" },
-        { role: "reload" },
+        // Explicit F5: the role's default (CmdOrCtrl+R) collided with Sync Now.
+        { role: "reload", accelerator: "F5" },
         { role: "toggleDevTools" },
         { type: "separator" },
         {
@@ -253,7 +256,8 @@ function buildMenu() {
       submenu: [
         {
           label: "Sync Now",
-          accelerator: "CmdOrCtrl+R",
+          // Configurable so it can be changed/disabled on hotkey conflicts.
+          ...(getSetting("syncHotkey") ? { accelerator: getSetting("syncHotkey") } : {}),
           click: () => mainWindow?.webContents.send("shortcut:sync-now")
         }
       ]
@@ -285,6 +289,7 @@ function registerIpc() {
   ipcMain.handle("settings:set", (_e, key: string, value: string) => {
     settingSet(key, value);
     if (key === "launchAtLogin") applyLaunchAtLogin(value === "1");
+    if (key === "syncHotkey") buildMenu(); // apply new accelerator immediately
   });
 
   ipcMain.handle("lists:all", () => listsAll());

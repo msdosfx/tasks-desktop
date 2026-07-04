@@ -352,6 +352,36 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
 
         {window.api.settings && (
           <>
+            <h3 style={{ marginTop: 18 }}>Sync</h3>
+            <div className="prefs-grid">
+              <label className="pref-row" title="Syncs all CalDAV accounts in the background. Manual sync (Ctrl+R) always works too.">
+                Sync automatically every
+                <select
+                  value={prefs.syncIntervalMinutes ?? "5"}
+                  onChange={(e) => setPref("syncIntervalMinutes", e.target.value)}
+                >
+                  <option value="1">1 minute</option>
+                  <option value="5">5 minutes</option>
+                  <option value="10">10 minutes</option>
+                  <option value="30">30 minutes</option>
+                  <option value="0">Off — manual only</option>
+                </select>
+              </label>
+              <label className="pref-row" title="Change or disable this if it conflicts with another app's hotkey. Applies immediately.">
+                "Sync Now" hotkey
+                <select
+                  value={prefs.syncHotkey ?? "CmdOrCtrl+R"}
+                  onChange={(e) => setPref("syncHotkey", e.target.value)}
+                >
+                  <option value="CmdOrCtrl+R">Ctrl+R</option>
+                  <option value="CmdOrCtrl+Shift+S">Ctrl+Shift+S</option>
+                  <option value="CmdOrCtrl+Alt+R">Ctrl+Alt+R</option>
+                  <option value="F9">F9</option>
+                  <option value="">No hotkey (menu only)</option>
+                </select>
+              </label>
+            </div>
+
             <h3 style={{ marginTop: 18 }}>Notifications &amp; startup</h3>
             <div className="prefs-grid">
               <label className="pref-row">

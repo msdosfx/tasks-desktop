@@ -115,6 +115,14 @@ input, textarea, select { user-select: text; }
   padding: 5px 16px;
   border-bottom: 1px solid #2c2d30;
   background: #1a1b1e;
+  flex-wrap: wrap;
+}
+.toolbar-filters-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 .due-filter-select {
@@ -369,7 +377,7 @@ input, textarea, select { user-select: text; }
   display: flex; align-items: center; gap: 8px;
   font-size: 12px; color: #c8c8c8; cursor: pointer;
 }
-.pref-row input[type="time"] {
+.pref-row input[type="time"], .pref-row select {
   background: #26272a; border: 1px solid #34353a; border-radius: 6px;
   padding: 3px 6px; color: #e6e6e6; font-size: 12px;
 }

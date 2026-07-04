@@ -5,6 +5,16 @@ Written 2026-07-03, end of session.
 ## UI fixes requested
 
 - "Show scheduled" toggle and "Save view" button in the toolbar-filters row are positioned awkwardly — rework their placement/layout (src/App.tsx toolbar-filters section, styles in src/styles.css).
+- Clearing the date should also clear the time (added 2026-07-04).
+
+## Status 2026-07-04 (Linux session)
+
+- v0.1.14 installed on the Linux machine via update-tasksdesktop.sh (script now at ~/.local/bin/update-tasksdesktop); launches cleanly.
+
+## Release notes process (new as of 2026-07-04)
+
+- RELEASE_NOTES.md at repo root is published as the GitHub release body by CI (`body_path` in build.yml).
+- Keep it updated as changes land; it always describes the *next* release. Reset it after each tag.
 
 ## Session context
 

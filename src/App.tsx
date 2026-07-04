@@ -89,6 +89,29 @@ export default function App() {
   }
 
   const searchInputRef = React.useRef<HTMLInputElement>(null);
+  const syncInFlight = React.useRef(false);
+  // Latest runSync without retriggering the timer effect on every render.
+  const runSyncRef = React.useRef<(auto?: boolean) => void>(() => {});
+  const [syncEveryMin, setSyncEveryMin] = useState(5);
+
+  useEffect(() => { runSyncRef.current = runSync; });
+
+  // Read the auto-sync interval at startup and again whenever Settings closes
+  // (the user may have just changed it).
+  useEffect(() => {
+    if (showSettings) return;
+    window.api.settings?.all().then((s: Record<string, string>) => {
+      const v = parseInt(s.syncIntervalMinutes ?? "5", 10);
+      setSyncEveryMin(Number.isFinite(v) && v >= 0 ? v : 5);
+    }).catch(() => {});
+  }, [showSettings]);
+
+  // Background auto-sync. 0 = manual only.
+  useEffect(() => {
+    if (!syncEveryMin) return;
+    const id = setInterval(() => runSyncRef.current(true), syncEveryMin * 60_000);
+    return () => clearInterval(id);
+  }, [syncEveryMin]);
 
   const loadLists = useCallback(async () => setLists(await window.api.lists.all()), []);
   const loadTasks = useCallback(async () => setTasks(await window.api.tasks.all()), []);
@@ -345,9 +368,13 @@ export default function App() {
     await loadTasks();
   }
 
-  async function runSync() {
+  /** @param auto true for timer-driven background syncs: quiet unless something
+   *  was pulled/pushed or went wrong. Manual syncs always show a result. */
+  async function runSync(auto = false) {
+    if (syncInFlight.current) return;
+    syncInFlight.current = true;
     setSyncing(true);
-    setSyncMsg(null);
+    if (!auto) setSyncMsg(null);
     try {
       const accounts = await window.api.accounts.all();
       let pulled = 0, pushed = 0, errors: string[] = [];
@@ -357,10 +384,12 @@ export default function App() {
       }
       await loadTasks();
       await loadLists();
-      setSyncMsg(errors.length ? `Synced with errors: ${errors[0]}` : `Synced — ${pulled} pulled, ${pushed} pushed.`);
+      if (errors.length) setSyncMsg(`Synced with errors: ${errors[0]}`);
+      else if (!auto || pulled || pushed) setSyncMsg(`Synced — ${pulled} pulled, ${pushed} pushed.`);
     } catch (err: any) {
       setSyncMsg(err?.message || String(err));
     } finally {
+      syncInFlight.current = false;
       setSyncing(false);
       setTimeout(() => setSyncMsg(null), 6000);
     }
@@ -410,7 +439,7 @@ export default function App() {
         onRemoveList={removeList}
         onSyncList={syncListAccount}
         onOpenSettings={() => setShowSettings(true)}
-        onSync={runSync}
+        onSync={() => runSync()}
         syncing={syncing}
         syncMsg={syncMsg}
         forceAdding={forceAddingList}
@@ -468,6 +497,7 @@ export default function App() {
             <option value="title">Sort: Title</option>
             <option value="manual">Sort: Manual</option>
           </select>
+          <div className="toolbar-filters-right">
           <label className="hide-completed-toggle">
             <input type="checkbox" checked={hideCompleted} onChange={(e) => setHideCompleted(e.target.checked)} />
             Hide completed
@@ -493,6 +523,7 @@ export default function App() {
               ☆ Save view
             </button>
           )}
+          </div>
         </div>
         {syncMsg && <div style={{ padding: "4px 16px", fontSize: 12, color: "#9aa0a6" }}>{syncMsg}</div>}
         <TaskTable

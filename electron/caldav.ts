@@ -1,7 +1,9 @@
 import { createDAVClient } from "tsdav";
 
 type Client = Awaited<ReturnType<typeof createDAVClient>>;
-import { safeStorage } from "electron";
+import { app, safeStorage } from "electron";
+import fs from "node:fs";
+import path from "node:path";
 import {
   getDb,
   CaldavAccount,
@@ -15,7 +17,54 @@ import {
   taskUpdate,
   taskDelete
 } from "./db.js";
-import { taskToVTodo, parseVTodo, newUid } from "./ical.js";
+import { taskToVTodo, parseVTodo, newUid, ParsedVTodo } from "./ical.js";
+
+/** Append a timestamped line to sync.log in the app's user-data folder, so sync
+ *  behavior can be diagnosed after the fact. Best-effort: never breaks sync. */
+export function syncLog(line: string) {
+  try {
+    const file = path.join(app.getPath("userData"), "sync.log");
+    try {
+      if (fs.statSync(file).size > 1_000_000) fs.renameSync(file, `${file}.1`);
+    } catch { /* file doesn't exist yet */ }
+    fs.appendFileSync(file, `${new Date().toISOString()} ${line}\n`);
+  } catch { /* logging must never break sync */ }
+}
+
+/** Compare two object URLs by path only (servers report absolute or relative). */
+function samePath(a: string, b: string): boolean {
+  const p = (u: string) => { try { return new URL(u, "http://x").pathname; } catch { return u; } };
+  return p(a) === p(b);
+}
+
+/** Date equality that tolerates formatting differences (ms, timezone spelling)
+ *  but distinguishes date-only from date+time values. */
+function dateEq(a: string | null, b: string | null): boolean {
+  if (!a || !b) return (a ?? null) === (b ?? null);
+  const aDateOnly = a.length <= 10;
+  const bDateOnly = b.length <= 10;
+  if (aDateOnly !== bDateOnly) return false;
+  return aDateOnly ? a === b : new Date(a).getTime() === new Date(b).getTime();
+}
+
+/** True when the remote VTODO carries the same content as the local task. Then
+ *  an etag difference is just a version-stamp move — typically our own last
+ *  push whose PUT response carried no ETag header — not a real remote edit. */
+function sameContent(local: Task, remote: ParsedVTodo): boolean {
+  const norm = (s: string | null | undefined) => (s ?? "").trim();
+  const tagSet = (s: string | null | undefined) =>
+    norm(s).split(",").map((t) => t.trim()).filter(Boolean).sort().join(",");
+  return (
+    norm(local.title) === norm(remote.title) &&
+    norm(local.notes) === norm(remote.notes) &&
+    dateEq(local.due_date, remote.due_date) &&
+    dateEq(local.start_date, remote.start_date) &&
+    (local.priority || 0) === (remote.priority || 0) &&
+    (local.completed ? 1 : 0) === remote.completed &&
+    norm(local.recurrence) === norm(remote.recurrence) &&
+    tagSet(local.tags) === tagSet(remote.tags)
+  );
+}
 
 export function encryptPassword(plain: string): string {
   if (safeStorage.isEncryptionAvailable()) {
@@ -168,6 +217,7 @@ export async function syncAccount(account: CaldavAccount): Promise<SyncResult[]>
 async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
   const result: SyncResult = { listId: list.id, pulled: 0, pushed: 0, errors: [] };
   const calendarUrl = list.caldav_calendar_url!;
+  syncLog(`--- sync start: list "${list.name}" (${calendarUrl})`);
 
   try {
     const calendar = { url: calendarUrl } as any;
@@ -224,11 +274,20 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
         });
         result.pulled++;
       } else if (local.caldav_etag !== remote.etag) {
+        if (sameContent(local, parsed)) {
+          // Same content, different version stamp — usually our own previous
+          // push whose PUT response carried no ETag header. Record the etag;
+          // there is nothing to pull and nothing left to push.
+          syncLog(`etag-only catchup for "${local.title}" (${uid}): ${local.caldav_etag} -> ${remote.etag}`);
+          taskUpdate(local.id, { caldav_href: remote.url, caldav_etag: remote.etag });
+          continue;
+        }
         if (local.dirty) {
           // Both sides changed since the last sync. The remote version wins on
           // the synced task, but the local edits are preserved as a new,
           // unsynced task (which the push phase below uploads), so neither
           // side's work is silently lost.
+          syncLog(`CONFLICT on "${local.title}" (${uid}): remote wins, local edits saved as "(conflicted copy)"`);
           taskCreate({
             list_id: list.id,
             parent_id: local.parent_id,
@@ -242,6 +301,8 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
             recurrence: local.recurrence,
             tags: local.tags
           });
+        } else {
+          syncLog(`pull overwrite of clean task "${local.title}" (${uid}): ${local.caldav_etag} -> ${remote.etag}`);
         }
         taskUpdate(local.id, {
           title: parsed.title,
@@ -261,6 +322,10 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
     }
 
     // Push: local items with no UID (new) or modified after last known etag.
+    // Servers commonly omit the ETag header on PUT responses; anything pushed
+    // without one gets its real etag fetched afterwards (see below) so the
+    // next sync doesn't mistake our own upload for a remote change.
+    const needEtagRefresh: { id: string; href: string; title: string }[] = [];
     const freshLocalTasks = tasksByList(list.id);
     for (const local of freshLocalTasks) {
       if (local.deleted) continue;
@@ -274,13 +339,18 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
             filename,
             iCalString: ics
           });
+          const href = created.url || `${calendarUrl}${filename}`;
+          const etag = created.headers?.get?.("etag") || null;
           taskUpdate(local.id, {
             caldav_uid: uid,
-            caldav_href: created.url || `${calendarUrl}${filename}`,
-            caldav_etag: created.headers?.get?.("etag") || null
+            caldav_href: href,
+            caldav_etag: etag
           } as Partial<Task>);
+          if (!etag) needEtagRefresh.push({ id: local.id, href, title: local.title });
+          syncLog(`pushed new "${local.title}" (${uid})${etag ? "" : " — no etag in response"}`);
           result.pushed++;
         } catch (err: any) {
+          syncLog(`push create FAILED for "${local.title}": ${err?.message || err}`);
           result.errors.push(`Create failed for "${local.title}": ${err?.message || err}`);
         }
       } else {
@@ -291,23 +361,51 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
         if (!local.dirty) continue;
         const remote = remoteByUid.get(local.caldav_uid);
         const remoteEtag = remote?.etag ?? null;
-        if (remoteEtag !== local.caldav_etag) continue; // pulled this round already, skip pushing stale copy
+        if (remoteEtag !== local.caldav_etag) {
+          // Real content conflicts were already handled in the pull phase.
+          syncLog(`push skipped for dirty "${local.title}": etag moved this round (${local.caldav_etag} vs ${remoteEtag})`);
+          continue;
+        }
         const { ics } = taskToVTodo(local);
+        const href = local.caldav_href || remote?.url || "";
         try {
           const updated = await client.updateCalendarObject({
             calendarObject: {
-              url: local.caldav_href || remote?.url || "",
+              url: href,
               data: ics,
               etag: local.caldav_etag || ""
             }
           });
+          const etag = updated.headers?.get?.("etag") || null;
           taskUpdate(local.id, {
-            caldav_etag: updated.headers?.get?.("etag") || local.caldav_etag
+            caldav_etag: etag || local.caldav_etag
           } as Partial<Task>);
+          if (!etag) needEtagRefresh.push({ id: local.id, href, title: local.title });
+          syncLog(`pushed update "${local.title}" (${local.caldav_uid})${etag ? "" : " — no etag in response"}`);
           result.pushed++;
         } catch (err: any) {
+          syncLog(`push update FAILED for "${local.title}": ${err?.message || err}`);
           result.errors.push(`Update failed for "${local.title}": ${err?.message || err}`);
         }
+      }
+    }
+
+    // Fetch real etags for anything the server didn't stamp on PUT.
+    if (needEtagRefresh.length) {
+      try {
+        const fresh = await client.fetchCalendarObjects({
+          calendar: { url: calendarUrl } as any,
+          objectUrls: needEtagRefresh.map((o) => o.href)
+        });
+        for (const o of needEtagRefresh) {
+          const obj = fresh.find((f) => samePath(f.url, o.href));
+          if (obj?.etag) taskUpdate(o.id, { caldav_etag: obj.etag } as Partial<Task>);
+          syncLog(`etag refresh for "${o.title}": ${obj?.etag ?? "NOT FOUND"}`);
+        }
+      } catch (err: any) {
+        // Non-fatal: the content comparison in the pull phase makes a stale
+        // etag self-healing on the next sync.
+        syncLog(`etag refresh failed: ${err?.message || err}`);
       }
     }
 
@@ -327,8 +425,10 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
       taskDelete(t.id, true);
     }
   } catch (err: any) {
+    syncLog(`sync FAILED for list "${list.name}": ${err?.message || err}`);
     result.errors.push(err?.message || String(err));
   }
 
+  syncLog(`--- sync done: list "${list.name}" — pulled ${result.pulled}, pushed ${result.pushed}, errors ${result.errors.length}`);
   return result;
 }

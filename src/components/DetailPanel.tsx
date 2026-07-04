@@ -121,7 +121,7 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
         <div>
           <label>Start date</label>
           <div className="date-time-pair">
-            <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); markDirty(); }} />
+            <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); if (!e.target.value) setStartTime(""); markDirty(); }} />
             <input type="time" value={startTime} disabled={!startDate} title={startDate ? "Optional time" : "Set a date first"}
               onChange={(e) => { setStartTime(e.target.value); markDirty(); }} />
           </div>
@@ -129,7 +129,7 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
         <div>
           <label>Due date</label>
           <div className="date-time-pair">
-            <input type="date" value={dueDate} onChange={(e) => { setDueDate(e.target.value); markDirty(); }} />
+            <input type="date" value={dueDate} onChange={(e) => { setDueDate(e.target.value); if (!e.target.value) setDueTime(""); markDirty(); }} />
             <input type="time" value={dueTime} disabled={!dueDate} title={dueDate ? "Optional time" : "Set a date first"}
               onChange={(e) => { setDueTime(e.target.value); markDirty(); }} />
           </div>
