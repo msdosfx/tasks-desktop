@@ -1,6 +1,6 @@
 {
   "name": "tasks-desktop",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "A non-touch, mouse/keyboard-first desktop app with Tasks.org-compatible features and CalDAV sync.",
   "author": "Arlis <remindful_boogeyman454@simplelogin.com>",
   "main": "dist-electron/main.js",
@@ -65,7 +65,8 @@
     "icon": "build/icon",
     "win": {
       "target": "nsis",
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "artifactName": "${name}-Setup-${version}.${ext}"
     },
     "linux": {
       "target": [

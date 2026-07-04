@@ -39,7 +39,7 @@ let isQuiting = false;
 const SETTING_DEFAULTS: Record<string, string> = {
   notificationsEnabled: "1",
   reminderTime: "18:00", // when date-only tasks fire
-  closeToTray: "1",
+  closeToTray: "0", // off by default: the X button really quits; opt in via settings
   launchAtLogin: "0"
 };
 
@@ -81,8 +81,10 @@ function createWindow() {
     return { action: "deny" };
   });
 
-  // "Close to tray": the X button hides the window so reminders keep firing.
-  // Quitting is still available from the tray menu (or File > Quit / Cmd+Q).
+  // "Close to tray" (opt-in, off by default): when enabled in settings, the X
+  // button hides the window so reminders keep firing. When disabled, closing
+  // the window quits the app. Quitting is always available from the tray menu
+  // and File > Exit.
   mainWindow.on("close", (e) => {
     if (!isQuiting && getSetting("closeToTray") === "1") {
       e.preventDefault();
@@ -193,7 +195,12 @@ function buildMenu() {
           click: () => mainWindow?.webContents.send("shortcut:new-list")
         },
         { type: "separator" },
-        { role: isMac ? "close" : "quit" }
+        ...(isMac
+          ? [{ role: "close" as const }]
+          : [{
+              label: "Exit",
+              click: () => { isQuiting = true; app.quit(); }
+            }])
       ]
     },
     {
