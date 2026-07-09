@@ -15,9 +15,11 @@ import {
   tasksByList,
   taskCreate,
   taskUpdate,
-  taskDelete
+  taskDelete,
+  eventUpsertFromRemote,
+  eventsPruneMissing
 } from "./db.js";
-import { taskToVTodo, parseVTodo, newUid, ParsedVTodo } from "./ical.js";
+import { taskToVTodo, parseVTodo, newUid, ParsedVTodo, parseVEvent } from "./ical.js";
 
 /** Append a timestamped line to sync.log in the app's user-data folder, so sync
  *  behavior can be diagnosed after the fact. Best-effort: never breaks sync. */
@@ -118,17 +120,17 @@ export async function testConnection(account: CaldavAccount): Promise<{ ok: bool
 export async function discoverCalendars(account: CaldavAccount): Promise<DiscoveredCalendar[]> {
   const client = await clientFor(account);
   const calendars = await client.fetchCalendars();
+  // Previously filtered to VTODO-capable calendars only, since linking was
+  // task-only. Now that the calendar view pulls VEVENTs too, event-only
+  // calendars (the common case for Google/Outlook-style setups where Tasks
+  // and Calendar are separate collections) need to be linkable as well.
   return calendars
-    .filter((cal) => {
-      const comps = (cal as any).components as string[] | undefined;
-      // If the server doesn't advertise supported-calendar-component-set, assume it could hold todos.
-      return !comps || comps.includes("VTODO");
-    })
     .map((cal) => ({
       url: String(cal.url),
       displayName: String(cal.displayName || cal.url),
       ctag: (cal as any).ctag ?? null,
-      supportsTodo: true,
+      supportsTodo: !((cal as any).components as string[] | undefined)
+        || ((cal as any).components as string[]).includes("VTODO"),
       color: cal.calendarColor ?? (cal as any).color ?? null
     }));
 }
@@ -210,8 +212,57 @@ export async function syncAccount(account: CaldavAccount): Promise<SyncResult[]>
   const results: SyncResult[] = [];
   for (const list of linkedLists) {
     results.push(await syncList(client, list));
+    // Read-only mirror of this calendar's VEVENTs. Runs after task sync,
+    // failures are logged but never surfaced as sync errors (see pullEvents).
+    await pullEvents(client, list);
   }
   return results;
+}
+
+/** Read-only pull of VEVENTs for a linked list's calendar, for display on the
+ *  calendar view. No push phase yet — this app doesn't create/edit events. */
+async function pullEvents(client: Client, list: TaskList) {
+  const calendarUrl = list.caldav_calendar_url!;
+  try {
+    const objects = await Promise.race([
+      client.fetchCalendarObjects({
+        calendar: { url: calendarUrl } as any,
+        filters: [
+          {
+            "comp-filter": {
+              _attributes: { name: "VCALENDAR" },
+              "comp-filter": {
+                _attributes: { name: "VEVENT" }
+              }
+            }
+          }
+        ] as any
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("fetchCalendarObjects (events) timed out after 15s")), 15000)
+      )
+    ]);
+    const remoteUids = new Set<string>();
+    for (const obj of objects) {
+      const parsed = parseVEvent(obj.data || "");
+      if (!parsed) continue;
+      remoteUids.add(parsed.uid);
+      eventUpsertFromRemote(list.id, parsed.uid, obj.url, obj.etag || "", {
+        title: parsed.title,
+        notes: parsed.notes,
+        location: parsed.location,
+        start_date: parsed.start_date,
+        end_date: parsed.end_date,
+        all_day: parsed.all_day,
+        recurrence: parsed.recurrence,
+        tags: parsed.tags
+      });
+    }
+    eventsPruneMissing(list.id, remoteUids);
+    syncLog(`events: pulled ${remoteUids.size} for list "${list.name}"`);
+  } catch (err: any) {
+    syncLog(`events pull FAILED for list "${list.name}": ${err?.message || err}`);
+  }
 }
 
 async function syncList(client: Client, list: TaskList): Promise<SyncResult> {

@@ -75,7 +75,7 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
   }, [task?.id]);
 
   if (!task) {
-    return <div className="detail-panel"><div className="no-selection">Select a task to see details.</div></div>;
+    return <div className="detail-panel"><div className="no-selection">Select a task or event to see details.</div></div>;
   }
 
   function markDirty() {

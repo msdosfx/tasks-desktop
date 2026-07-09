@@ -24,6 +24,9 @@ const api = {
     toggleComplete: (id: string) => ipcRenderer.invoke("tasks:toggleComplete", id),
     delete: (id: string, hard?: boolean) => ipcRenderer.invoke("tasks:delete", id, hard)
   },
+  events: {
+    all: () => ipcRenderer.invoke("events:all")
+  },
   accounts: {
     all: () => ipcRenderer.invoke("accounts:all"),
     // Electron has no CORS/host-permission model to satisfy -- see

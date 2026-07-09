@@ -1,6 +1,23 @@
 # Roadmap / ideas to circle back to
 
 ## Next up
+- **Collapsible/resizable right rail** (added 2026-07-09, user said this can wait if it's a big
+  lift): let the Today pane + task/event detail column collapse or resize so the calendar grid
+  can use the freed width. `.app`'s grid-template-columns is currently fixed (`220px 1fr 320px`
+  in styles.css) — would need a collapsed-width state, a toggle button, and the grid template to
+  react to it.
+- **Event editing** (added 2026-07-09): calendar events are currently a read-only mirror
+  (`EventDetailPanel.tsx` explicitly says so). User asked for edit capability. Needs: `eventToVEvent`
+  in `electron/ical.ts` (mirroring `taskToVTodo`), a push phase in `caldav.ts`'s `pullEvents` (or a
+  new `pushEvents`) mirroring the task etag/dirty/conflict logic, and an editable form (mirroring
+  `DetailPanel.tsx`, swapping priority/subtasks for location/end-time). Real scope, not a quick add.
+- **Per-category colors** (added 2026-07-09): Thunderbird supports assigning a color to each
+  category, independent of the calendar/list it's on. Tasks.org doesn't have this. Calendar view
+  currently colors tasks/events by their list only (categories have no color anywhere in the app —
+  they're free-text comma-separated tags with no color storage). Worth adding: a `categories` table
+  (name, color) + small settings UI, then calendar/task-table coloring could prefer category color
+  over list color when a task has one. Deferred for now — calendar view v1 uses list color only.
+
 - **Calendar view** — circle back to this after the recurrence + hide-until work ships.
   Before designing it, look at **Rainlendar**: a lot of Tasks.org users run it as their
   desktop calendar. Worth checking (a) what its task/event UI gets right, and (b) whether

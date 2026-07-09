@@ -27,6 +27,8 @@ interface Props {
   smartFilters?: SidebarSmartFilter[];
   onApplyFilter?: (f: any) => void;
   onDeleteFilter?: (id: string) => void;
+  calendarListFilter?: string;
+  onSetCalendarListFilter?: (id: string) => void;
 }
 
 export default function Sidebar({
@@ -48,7 +50,9 @@ export default function Sidebar({
   onSyncList,
   smartFilters = [],
   onApplyFilter,
-  onDeleteFilter
+  onDeleteFilter,
+  calendarListFilter = "all",
+  onSetCalendarListFilter
 }: Props) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
@@ -183,6 +187,13 @@ export default function Sidebar({
           items={[
             ...(listMenu.list.caldav_account_id
               ? [{ label: "Sync now", onClick: () => onSyncList(listMenu.list.caldav_account_id!) }]
+              : []),
+            ...(onSetCalendarListFilter
+              ? [
+                  calendarListFilter === listMenu.list.id
+                    ? { label: "Show all lists in Calendar", onClick: () => onSetCalendarListFilter("all") }
+                    : { label: `Show only "${listMenu.list.name}" in Calendar`, onClick: () => onSetCalendarListFilter(listMenu.list.id) }
+                ]
               : []),
             {
               label: "Remove list",

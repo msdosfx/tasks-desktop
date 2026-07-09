@@ -33,6 +33,25 @@ export interface Task {
   updated_at: string;
 }
 
+export interface CalendarEvent {
+  id: string;
+  list_id: string;
+  title: string;
+  notes: string;
+  location: string;
+  start_date: string;
+  end_date: string | null;
+  all_day: 0 | 1;
+  recurrence: string | null;
+  tags: string;
+  caldav_uid: string | null;
+  caldav_href: string | null;
+  caldav_etag: string | null;
+  deleted: 0 | 1;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CaldavAccountPublic {
   id: string;
   label: string;
@@ -93,6 +112,10 @@ declare global {
         update: (id: string, patch: Partial<Task>) => Promise<Task>;
         toggleComplete: (id: string) => Promise<Task>;
         delete: (id: string, hard?: boolean) => Promise<void>;
+      };
+      /** Absent in the Thunderbird add-on shim -- always optional-chain. */
+      events?: {
+        all: () => Promise<CalendarEvent[]>;
       };
       accounts: {
         all: () => Promise<CaldavAccountPublic[]>;

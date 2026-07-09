@@ -147,3 +147,57 @@ function normalizePriority(p: number): 0 | 1 | 5 | 9 {
 export function newUid(): string {
   return `${nanoid()}@tasks-desktop`;
 }
+
+export interface ParsedVEvent {
+  uid: string;
+  title: string;
+  notes: string;
+  location: string;
+  start_date: string;
+  end_date: string | null;
+  all_day: 0 | 1;
+  recurrence: string | null;
+  tags: string;
+}
+
+/** Parses a VEVENT (read-only — this app doesn't create/edit events yet, only
+ *  mirrors them from CalDAV for display). Ignores VEVENTs with no DTSTART,
+ *  which aren't meaningfully placeable on a calendar grid. */
+export function parseVEvent(ics: string): ParsedVEvent | null {
+  try {
+    const jcal = ICAL.parse(ics);
+    const comp = new ICAL.Component(jcal);
+    const vevent = comp.getFirstSubcomponent("vevent");
+    if (!vevent) return null;
+
+    const uid = vevent.getFirstPropertyValue("uid") as string;
+    const title = (vevent.getFirstPropertyValue("summary") as string) || "Untitled";
+    const notes = (vevent.getFirstPropertyValue("description") as string) || "";
+    const location = (vevent.getFirstPropertyValue("location") as string) || "";
+
+    const dtstart = vevent.getFirstPropertyValue("dtstart") as ICAL.Time | null;
+    if (!dtstart) return null;
+    const dtend = vevent.getFirstPropertyValue("dtend") as ICAL.Time | null;
+
+    const rruleProp = vevent.getFirstProperty("rrule");
+    const recurrence = rruleProp ? (rruleProp.getFirstValue() as ICAL.Recur).toString() : null;
+
+    const categories = vevent.getFirstProperty("categories");
+    const tags = categories ? (categories.getValues() as string[]).join(", ") : "";
+
+    return {
+      uid,
+      title,
+      notes,
+      location,
+      start_date: icalTimeToString(dtstart),
+      end_date: dtend ? icalTimeToString(dtend) : null,
+      all_day: dtstart.isDate ? 1 : 0,
+      recurrence,
+      tags
+    };
+  } catch (err) {
+    console.error("Failed to parse VEVENT", err);
+    return null;
+  }
+}

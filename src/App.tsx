@@ -5,7 +5,10 @@ import DetailPanel from "./components/DetailPanel";
 import ContextMenu from "./components/ContextMenu";
 import SettingsModal from "./components/SettingsModal";
 import AboutModal from "./components/AboutModal";
-import { Task, TaskList, CaldavAccountPublic } from "./types";
+import CalendarView, { CalendarShow } from "./components/CalendarView";
+import TodayPane from "./components/TodayPane";
+import EventDetailPanel from "./components/EventDetailPanel";
+import { Task, TaskList, CaldavAccountPublic, CalendarEvent } from "./types";
 
 type Scope = string | "all" | "today";
 type SortMode = "priority" | "due" | "title" | "manual";
@@ -29,9 +32,23 @@ function loadSmartFilters(): SmartFilter[] {
 export default function App() {
   const [lists, setLists] = useState<TaskList[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [mainView, setMainView] = useState<"tasks" | "calendar">("tasks");
+  const [calendarShow, setCalendarShow] = useState<CalendarShow>(
+    () => (localStorage.getItem("calendarShow") as CalendarShow) || "both"
+  );
+  // "all" or a single list id -- right-click a list/calendar in the sidebar
+  // ("Show only ...") to isolate the calendar view to it.
+  const [calendarListFilter, setCalendarListFilter] = useState(() => localStorage.getItem("calendarListFilter") || "all");
+  useEffect(() => { localStorage.setItem("calendarListFilter", calendarListFilter); }, [calendarListFilter]);
   const [accounts, setAccounts] = useState<CaldavAccountPublic[]>([]);
   const [scope, setScope] = useState<Scope>("all");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  // Task and event selection are mutually exclusive -- the right rail shows
+  // one detail panel at a time.
+  function selectTask(id: string | null) { setSelectedEventId(null); setSelectedTaskId(id); }
+  function selectEvent(id: string | null) { setSelectedTaskId(null); setSelectedEventId(id); }
   const [search, setSearch] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -60,6 +77,9 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("smartFilters", JSON.stringify(smartFilters));
   }, [smartFilters]);
+  useEffect(() => {
+    localStorage.setItem("calendarShow", calendarShow);
+  }, [calendarShow]);
 
   // Reset filters when switching lists
   useEffect(() => {
@@ -138,8 +158,10 @@ export default function App() {
   const loadLists = useCallback(async () => setLists(await window.api.lists.all()), []);
   const loadTasks = useCallback(async () => setTasks(await window.api.tasks.all()), []);
   const loadAccounts = useCallback(async () => setAccounts(await window.api.accounts.all()), []);
+  // Absent in the Thunderbird add-on shim -- always optional-chain.
+  const loadEvents = useCallback(async () => setEvents((await window.api.events?.all()) ?? []), []);
 
-  useEffect(() => { loadLists(); loadTasks(); loadAccounts(); }, [loadLists, loadTasks, loadAccounts]);
+  useEffect(() => { loadLists(); loadTasks(); loadAccounts(); loadEvents(); }, [loadLists, loadTasks, loadAccounts, loadEvents]);
 
   useEffect(() => {
     const offs = [
@@ -149,7 +171,7 @@ export default function App() {
       window.api.on("shortcut:sync-now", () => runSync()),
       window.api.on("shortcut:open-settings", () => setShowSettings(true)),
       window.api.on("shortcut:open-about", () => setShowAbout(true)),
-      window.api.on("notify:select-task", (id: string) => { setScope("all"); setSelectedTaskId(id); })
+      window.api.on("notify:select-task", (id: string) => { setScope("all"); selectTask(id); })
     ];
     return () => offs.forEach((off) => off());
   }, []);
@@ -327,7 +349,7 @@ export default function App() {
     if (!list_id) return;
     const t = await window.api.tasks.create({ list_id, title: "New task" });
     await loadTasks();
-    setSelectedTaskId(t.id);
+    selectTask(t.id);
     scheduleDirtySync();
   }
 
@@ -345,7 +367,7 @@ export default function App() {
 
   async function deleteTask(id: string) {
     await window.api.tasks.delete(id);
-    if (selectedTaskId === id) setSelectedTaskId(null);
+    if (selectedTaskId === id) selectTask(null);
     await loadTasks();
     scheduleDirtySync();
   }
@@ -412,6 +434,7 @@ export default function App() {
       }
       await loadTasks();
       await loadLists();
+      await loadEvents();
       if (errors.length) setSyncMsg(`Synced with errors: ${errors[0]}`);
       else if (!auto || pulled || pushed) setSyncMsg(`Synced — ${pulled} pulled, ${pushed} pushed.`);
     } catch (err: any) {
@@ -429,6 +452,7 @@ export default function App() {
     const res = await window.api.accounts.sync(accountId);
     await loadTasks();
     await loadLists();
+    await loadEvents();
     return res;
   }
 
@@ -475,9 +499,29 @@ export default function App() {
         smartFilters={smartFilters}
         onApplyFilter={applySmartFilter}
         onDeleteFilter={(id) => setSmartFilters((prev) => prev.filter((f) => f.id !== id))}
+        calendarListFilter={calendarListFilter}
+        onSetCalendarListFilter={setCalendarListFilter}
       />
 
       <div className="main">
+        <div className="view-tabs">
+          <button className={mainView === "tasks" ? "active" : ""} onClick={() => setMainView("tasks")}>Tasks</button>
+          <button className={mainView === "calendar" ? "active" : ""} onClick={() => setMainView("calendar")}>Calendar</button>
+        </div>
+        {mainView === "calendar" ? (
+          <CalendarView
+            events={events}
+            tasks={tasks}
+            lists={lists}
+            calendarShow={calendarShow}
+            onSetCalendarShow={setCalendarShow}
+            onSelectTask={selectTask}
+            onSelectEvent={selectEvent}
+            listFilter={calendarListFilter}
+            onSetListFilter={setCalendarListFilter}
+          />
+        ) : (
+        <>
         <div className="toolbar">
           <h2>{scopeTitle}</h2>
           <input
@@ -557,29 +601,41 @@ export default function App() {
         <TaskTable
           tasks={visibleTasks}
           selectedTaskId={selectedTaskId}
-          onSelect={setSelectedTaskId}
+          onSelect={selectTask}
           onToggleComplete={toggleComplete}
           dragEnabled={sortMode === "manual"}
           onReorder={reorderTask}
           onContextMenu={(e, taskId) => {
             e.preventDefault();
-            setSelectedTaskId(taskId);
+            selectTask(taskId);
             setMenu({ x: e.clientX, y: e.clientY, taskId });
           }}
         />
+        </>
+        )}
       </div>
 
-      <DetailPanel
-        task={selectedTask}
-        lists={lists}
-        subtasks={subtasksOfSelected}
-        allCategories={allCategories}
-        onUpdate={updateTask}
-        onDelete={deleteTask}
-        onAddSubtask={addSubtask}
-        onToggleComplete={toggleComplete}
-        onSelectTask={setSelectedTaskId}
-      />
+      <div className="right-rail">
+        <TodayPane tasks={tasks} lists={lists} onSelectTask={selectTask} />
+        {selectedEventId ? (
+          <EventDetailPanel
+            event={events.find((e) => e.id === selectedEventId) || null}
+            lists={lists}
+          />
+        ) : (
+          <DetailPanel
+            task={selectedTask}
+            lists={lists}
+            subtasks={subtasksOfSelected}
+            allCategories={allCategories}
+            onUpdate={updateTask}
+            onDelete={deleteTask}
+            onAddSubtask={addSubtask}
+            onToggleComplete={toggleComplete}
+            onSelectTask={selectTask}
+          />
+        )}
+      </div>
 
       {menu && (
         <ContextMenu

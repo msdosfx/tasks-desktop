@@ -46,6 +46,25 @@ export interface Task {
   updated_at: string;
 }
 
+export interface CalendarEvent {
+  id: string;
+  list_id: string;
+  title: string;
+  notes: string;
+  location: string;
+  start_date: string; // ISO date (all-day) or datetime
+  end_date: string | null; // ISO date or datetime; null = same instant as start
+  all_day: 0 | 1;
+  recurrence: string | null; // RRULE string, no "RRULE:" prefix
+  tags: string; // comma-separated
+  caldav_uid: string | null;
+  caldav_href: string | null;
+  caldav_etag: string | null;
+  deleted: 0 | 1;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CaldavAccount {
   id: string;
   label: string;
@@ -113,6 +132,29 @@ function migrate(db: DatabaseSync) {
       FOREIGN KEY (list_id) REFERENCES lists(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS events (
+      id TEXT PRIMARY KEY,
+      list_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      notes TEXT NOT NULL DEFAULT '',
+      location TEXT NOT NULL DEFAULT '',
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      all_day INTEGER NOT NULL DEFAULT 0,
+      recurrence TEXT,
+      tags TEXT NOT NULL DEFAULT '',
+      caldav_uid TEXT,
+      caldav_href TEXT,
+      caldav_etag TEXT,
+      deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (list_id) REFERENCES lists(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_events_list ON events(list_id);
+    CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_date);
+
     CREATE TABLE IF NOT EXISTS caldav_accounts (
       id TEXT PRIMARY KEY,
       label TEXT NOT NULL,
@@ -137,6 +179,7 @@ function migrate(db: DatabaseSync) {
   // Older databases predate these columns.
   try { db.exec(`ALTER TABLE tasks ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE tasks ADD COLUMN notified_at TEXT`); } catch { /* already present */ }
+  try { db.exec(`ALTER TABLE events ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch { /* already present */ }
 
   const listCount = db.prepare("SELECT COUNT(*) AS c FROM lists").get() as { c: number };
   if (listCount.c === 0) {
@@ -344,6 +387,96 @@ export function subtasksOf(parentId: string): Task[] {
   return getDb()
     .prepare(`SELECT * FROM tasks WHERE parent_id = ? AND deleted = 0 ORDER BY sort_order ASC`)
     .all(parentId) as unknown as Task[];
+}
+
+// ---------- Events (read-only pull from CalDAV VEVENTs; no local create/edit yet) ----------
+export function eventsAll(): CalendarEvent[] {
+  return getDb()
+    .prepare(`SELECT * FROM events WHERE deleted = 0 ORDER BY start_date ASC`)
+    .all() as unknown as CalendarEvent[];
+}
+
+export function eventsByList(listId: string): CalendarEvent[] {
+  return getDb()
+    .prepare(`SELECT * FROM events WHERE list_id = ? AND deleted = 0 ORDER BY start_date ASC`)
+    .all(listId) as unknown as CalendarEvent[];
+}
+
+/** All events (including soft-deleted) for a list, keyed by CalDAV uid — used by
+ *  the sync engine to diff against what the server currently has. */
+export function eventsByListWithUid(listId: string): Map<string, CalendarEvent> {
+  const rows = getDb()
+    .prepare(`SELECT * FROM events WHERE list_id = ?`)
+    .all(listId) as unknown as CalendarEvent[];
+  const map = new Map<string, CalendarEvent>();
+  for (const e of rows) if (e.caldav_uid) map.set(e.caldav_uid, e);
+  return map;
+}
+
+export function eventUpsertFromRemote(
+  listId: string,
+  uid: string,
+  href: string,
+  etag: string,
+  parsed: Omit<CalendarEvent, "id" | "list_id" | "caldav_uid" | "caldav_href" | "caldav_etag" | "deleted" | "created_at" | "updated_at">
+): void {
+  const db = getDb();
+  const now = nowIso();
+  const existing = db
+    .prepare(`SELECT id FROM events WHERE list_id = ? AND caldav_uid = ?`)
+    .get(listId, uid) as { id: string } | undefined;
+  if (existing) {
+    db.prepare(
+      `UPDATE events SET title=?, notes=?, location=?, start_date=?, end_date=?, all_day=?, recurrence=?, tags=?,
+       caldav_href=?, caldav_etag=?, deleted=0, updated_at=? WHERE id=?`
+    ).run(
+      parsed.title,
+      parsed.notes,
+      parsed.location,
+      parsed.start_date,
+      parsed.end_date,
+      parsed.all_day,
+      parsed.recurrence,
+      parsed.tags,
+      href,
+      etag,
+      now,
+      existing.id
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO events (id, list_id, title, notes, location, start_date, end_date, all_day, recurrence, tags, caldav_uid, caldav_href, caldav_etag, deleted, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+    ).run(
+      nanoid(),
+      listId,
+      parsed.title,
+      parsed.notes,
+      parsed.location,
+      parsed.start_date,
+      parsed.end_date,
+      parsed.all_day,
+      parsed.recurrence,
+      parsed.tags,
+      uid,
+      href,
+      etag,
+      now,
+      now
+    );
+  }
+}
+
+/** Removes local events for this list whose uid is no longer present remotely
+ *  (hard delete — these are a read-only mirror, nothing local to preserve). */
+export function eventsPruneMissing(listId: string, remoteUids: Set<string>) {
+  const db = getDb();
+  const local = db.prepare(`SELECT id, caldav_uid FROM events WHERE list_id = ?`).all(listId) as { id: string; caldav_uid: string | null }[];
+  for (const row of local) {
+    if (row.caldav_uid && !remoteUids.has(row.caldav_uid)) {
+      db.prepare(`DELETE FROM events WHERE id = ?`).run(row.id);
+    }
+  }
 }
 
 // ---------- CalDAV accounts ----------

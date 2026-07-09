@@ -9,6 +9,21 @@ Written 2026-07-03, end of session.
 - ~~Opening the app should trigger a sync; hitting save should trigger a sync~~ — done 2026-07-09 on `experimental` branch, see below.
 - Typing in the search field brings the app to a crawl — investigate performance (likely needs debouncing/memoization) (added 2026-07-04).
 - App has gotten super slow in general — overall performance investigation needed (added 2026-07-04).
+- **Bunch of "(conflicted copy)" tasks appeared** (added 2026-07-09, reported during calendar
+  testing session) — the sync engine creates a "(conflicted copy)" task when a dirty local task's
+  etag has moved remotely since last sync (`syncList` in `electron/caldav.ts`, `CONFLICT on...`
+  log line). Worth checking `sync.log` (userData folder) for how many/why — possibly a false-
+  positive triggered by today's heavy back-to-back testing (multiple dev instances, rapid manual
+  syncs), or a real bug in the etag-comparison logic. Needs investigation, not a quick guess-fix.
+- Dev/experimental tray icon still not confirmed working (added 2026-07-09): tried an in-memory
+  tint and then a real separate file (`build/icons/32x32-dev.png`, orange), wired into
+  `setupTray()` in `electron/main.ts` behind `isDev`. Neither changed what the user was seeing.
+  Suspect we've actually been looking at the **taskbar** icon (from `BrowserWindow`'s `icon`
+  option — never set in this codebase, so dev/unpackaged runs fall back to the generic Electron
+  logo there regardless of Tray changes) rather than the **system tray** icon near the clock
+  (which is what `setupTray()` actually controls). Need to confirm which one the user means,
+  then either fix `BrowserWindow({ icon: ... })` for dev too, or confirm the tray fix already
+  works and was just never actually checked in the right place.
 
 ## Sync-on-open / sync-on-save (2026-07-09, `experimental` branch)
 

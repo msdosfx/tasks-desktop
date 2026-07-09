@@ -18,6 +18,7 @@
     "dev:addon": "vite --config thunderbird-addon/vite.config.ts"
   },
   "dependencies": {
+    "@event-calendar/core": "^5.9.0",
     "electron-updater": "^6.3.9",
     "ical.js": "^2.1.0",
     "nanoid": "^5.0.7",
