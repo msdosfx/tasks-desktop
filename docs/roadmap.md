@@ -92,9 +92,17 @@
   silently dropped when a conflict copy is created.
 - **Verified working end to end (2026-07-09)**: push tested Tasks Desktop → Thunderbird (VALARM
   arrived, notification fired in both apps) and pull tested Thunderbird → Tasks Desktop (same).
-  Etar on Android didn't fire, but that's suspected to be an unrelated phone-side notification
-  issue (already seen before with other calendar apps on that device while asleep), not a sync
-  bug — worth a dedicated recheck with the phone awake, but not blocking.
+- **Android result is mixed, cause unconfirmed**: a reminder pushed from Thunderbird fired
+  correctly on the user's Android device, but a reminder pushed from Tasks Desktop to the same
+  calendar did not. Both should be producing an equivalent VALARM block, so this asymmetry is
+  worth a closer look eventually — possible causes include a real formatting difference between
+  Thunderbird's VALARM output and ours that Android's calendar app is pickier about, or it may
+  be unrelated to sync entirely: the user is running a "unique" Android calendar build and has
+  already seen unreliable notifications from other calendar apps on that device (suspected
+  phone-side issue, not proven). Not investigated further yet — if it recurs after ruling out
+  the phone-side angle, compare the raw .ics VALARM block Tasks Desktop pushes against the one
+  Thunderbird pushes (same task/event, both synced to the same calendar) for any structural
+  difference.
 
 ## Calendar month-view time badge showing wrong hour — FIXED (2026-07-09, same session)
 - While testing VALARM above, found a real event/reminder time (e.g. 4:41 PM) displaying as
