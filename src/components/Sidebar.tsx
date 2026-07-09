@@ -29,6 +29,11 @@ interface Props {
   onDeleteFilter?: (id: string) => void;
   calendarListFilter?: string;
   onSetCalendarListFilter?: (id: string) => void;
+  /** Experimental: when collapsed, only a thin "›" re-expand tab renders,
+   *  freeing up width for the calendar/task table (mirrors the Today pane's
+   *  collapse toggle on the other side of the window). */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
 export default function Sidebar({
@@ -52,7 +57,9 @@ export default function Sidebar({
   onApplyFilter,
   onDeleteFilter,
   calendarListFilter = "all",
-  onSetCalendarListFilter
+  onSetCalendarListFilter,
+  collapsed,
+  onToggleCollapsed
 }: Props) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
@@ -65,6 +72,16 @@ export default function Sidebar({
       onForceAddingHandled?.();
     }
   }, [forceAdding]);
+
+  // Must come after all hooks above (Rules of Hooks) -- an early return
+  // before a hook call crashes the component the moment `collapsed` flips.
+  if (collapsed) {
+    return (
+      <div className="sidebar sidebar-collapsed">
+        <button className="rail-toggle" onClick={onToggleCollapsed} title="Show Calendar/List">›</button>
+      </div>
+    );
+  }
 
   const openCount = (listId: string) => tasks.filter((t) => t.list_id === listId && !t.completed && !t.parent_id).length;
   const todayCount = tasks.filter((t) => {
@@ -91,7 +108,8 @@ export default function Sidebar({
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <span>Tasks Desktop</span>
+        <span>Calendar/List</span>
+        <button className="today-pane-collapse-btn" onClick={onToggleCollapsed} title="Hide panel">‹</button>
       </div>
       <div className="sidebar-list">
         <div className={`sidebar-item ${selectedListId === "today" ? "active" : ""}`} onClick={() => onSelect("today")}>

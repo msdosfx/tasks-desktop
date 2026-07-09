@@ -46,10 +46,25 @@ export default function App() {
   const [scope, setScope] = useState<Scope>("all");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  // Experimental: collapses the Today pane + detail panel column, and/or the
+  // sidebar, so the calendar/task table can use the freed width.
+  const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem("railCollapsed") === "1");
+  useEffect(() => { localStorage.setItem("railCollapsed", railCollapsed ? "1" : "0"); }, [railCollapsed]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("sidebarCollapsed") === "1");
+  useEffect(() => { localStorage.setItem("sidebarCollapsed", sidebarCollapsed ? "1" : "0"); }, [sidebarCollapsed]);
   // Task and event selection are mutually exclusive -- the right rail shows
-  // one detail panel at a time.
-  function selectTask(id: string | null) { setSelectedEventId(null); setSelectedTaskId(id); }
-  function selectEvent(id: string | null) { setSelectedTaskId(null); setSelectedEventId(id); }
+  // one detail panel at a time. Selecting something re-expands the rail if
+  // it was collapsed, so its details are actually visible.
+  function selectTask(id: string | null) {
+    setSelectedEventId(null);
+    setSelectedTaskId(id);
+    if (id) setRailCollapsed(false);
+  }
+  function selectEvent(id: string | null) {
+    setSelectedTaskId(null);
+    setSelectedEventId(id);
+    if (id) setRailCollapsed(false);
+  }
   const [search, setSearch] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -551,7 +566,7 @@ export default function App() {
     : (categoryFocused ? `Category: ${categoryFilter}` : categoryFilter);
 
   return (
-    <div className="app">
+    <div className={`app ${railCollapsed ? "rail-collapsed" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <Sidebar
         lists={lists}
         tasks={tasks}
@@ -574,6 +589,8 @@ export default function App() {
         onDeleteFilter={(id) => setSmartFilters((prev) => prev.filter((f) => f.id !== id))}
         calendarListFilter={calendarListFilter}
         onSetCalendarListFilter={setCalendarListFilter}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
 
       <div className="main">
@@ -702,8 +719,16 @@ export default function App() {
       </div>
 
       <div className="right-rail">
-        <TodayPane tasks={tasks} events={events} lists={lists} onSelectTask={selectTask} onSelectEvent={selectEvent} />
-        {selectedEventId ? (
+        <TodayPane
+          tasks={tasks}
+          events={events}
+          lists={lists}
+          onSelectTask={selectTask}
+          onSelectEvent={selectEvent}
+          collapsed={railCollapsed}
+          onToggleCollapsed={() => setRailCollapsed(!railCollapsed)}
+        />
+        {!railCollapsed && (selectedEventId ? (
           <EventDetailPanel
             event={events.find((e) => e.id === selectedEventId) || null}
             lists={lists}
@@ -723,7 +748,7 @@ export default function App() {
             onToggleComplete={toggleComplete}
             onSelectTask={selectTask}
           />
-        )}
+        ))}
       </div>
 
       {menu && (

@@ -9,6 +9,11 @@ interface Props {
   lists: TaskList[];
   onSelectTask: (id: string) => void;
   onSelectEvent: (id: string) => void;
+  /** Experimental: when collapsed, only the "Today ›" header row renders
+   *  (here and for the detail panel below it in App.tsx), freeing up width
+   *  for the calendar/task table. */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
 function todayStr(): string {
@@ -45,10 +50,20 @@ const showLabel: Record<CalendarShow, string> = {
  *  a task can appear once even if both are true today -- plus today's (and
  *  ongoing multi-day) calendar events, with the same Show both/tasks/events
  *  filter as the calendar view. */
-export default function TodayPane({ tasks, events, lists, onSelectTask, onSelectEvent }: Props) {
+export default function TodayPane({ tasks, events, lists, onSelectTask, onSelectEvent, collapsed, onToggleCollapsed }: Props) {
   const [show, setShow] = useState<CalendarShow>(() => (localStorage.getItem("todayPaneShow") as CalendarShow) || "both");
   const colorFor = (listId: string) => lists.find((l) => l.id === listId)?.color || "#4a90d9";
   const today = todayStr();
+
+  if (collapsed) {
+    return (
+      <div className="today-pane today-pane-collapsed">
+        <button className="rail-toggle" onClick={onToggleCollapsed} title="Show Today panel">
+          ‹
+        </button>
+      </div>
+    );
+  }
 
   const rows: Row[] = [];
   if (show !== "events") {
@@ -86,7 +101,10 @@ export default function TodayPane({ tasks, events, lists, onSelectTask, onSelect
   return (
     <div className="today-pane">
       <div className="today-pane-header">
-        <h3>Today</h3>
+        <div className="today-pane-title-row">
+          <h3>Today</h3>
+          <button className="today-pane-collapse-btn" onClick={onToggleCollapsed} title="Hide panel">›</button>
+        </div>
         <select
           className="due-filter-select"
           value={show}
