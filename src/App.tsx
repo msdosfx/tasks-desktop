@@ -92,7 +92,7 @@ export default function App() {
   const syncInFlight = React.useRef(false);
   // Latest runSync without retriggering the timer effect on every render.
   const runSyncRef = React.useRef<(auto?: boolean) => void>(() => {});
-  const [syncEveryMin, setSyncEveryMin] = useState(5);
+  const [syncEveryMin, setSyncEveryMin] = useState(60);
 
   useEffect(() => { runSyncRef.current = runSync; });
 
@@ -101,8 +101,8 @@ export default function App() {
   useEffect(() => {
     if (showSettings) return;
     window.api.settings?.all().then((s: Record<string, string>) => {
-      const v = parseInt(s.syncIntervalMinutes ?? "5", 10);
-      setSyncEveryMin(Number.isFinite(v) && v >= 0 ? v : 5);
+      const v = parseInt(s.syncIntervalMinutes ?? "60", 10);
+      setSyncEveryMin(Number.isFinite(v) && v >= 0 ? v : 60);
     }).catch(() => {});
   }, [showSettings]);
 
@@ -112,6 +112,28 @@ export default function App() {
     const id = setInterval(() => runSyncRef.current(true), syncEveryMin * 60_000);
     return () => clearInterval(id);
   }, [syncEveryMin]);
+
+  // Sync once shortly after launch, mirroring Tasks.org's "sync when the app
+  // is opened" behavior. Small delay so it doesn't race the initial list/task
+  // load or the window still painting in.
+  useEffect(() => {
+    const t = setTimeout(() => runSyncRef.current(true), 1500);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Debounced "sync after edits" — mirrors Tasks.org's dirty-row watcher:
+  // creating/editing/completing/deleting a task schedules a quiet auto-sync
+  // ~1 minute after the *last* change, so rapid edits collapse into one sync
+  // instead of one per keystroke/save.
+  const dirtySyncTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleDirtySync = useCallback(() => {
+    if (dirtySyncTimer.current) clearTimeout(dirtySyncTimer.current);
+    dirtySyncTimer.current = setTimeout(() => {
+      dirtySyncTimer.current = null;
+      runSyncRef.current(true);
+    }, 60_000);
+  }, []);
+  useEffect(() => () => { if (dirtySyncTimer.current) clearTimeout(dirtySyncTimer.current); }, []);
 
   const loadLists = useCallback(async () => setLists(await window.api.lists.all()), []);
   const loadTasks = useCallback(async () => setTasks(await window.api.tasks.all()), []);
@@ -297,6 +319,7 @@ export default function App() {
     }
     await window.api.tasks.update(id, { due_date: due } as Partial<Task>);
     await loadTasks();
+    scheduleDirtySync();
   }
 
   async function createTaskInScope() {
@@ -305,22 +328,26 @@ export default function App() {
     const t = await window.api.tasks.create({ list_id, title: "New task" });
     await loadTasks();
     setSelectedTaskId(t.id);
+    scheduleDirtySync();
   }
 
   async function updateTask(id: string, patch: Partial<Task>) {
     await window.api.tasks.update(id, patch);
     await loadTasks();
+    scheduleDirtySync();
   }
 
   async function toggleComplete(id: string) {
     await window.api.tasks.toggleComplete(id);
     await loadTasks();
+    scheduleDirtySync();
   }
 
   async function deleteTask(id: string) {
     await window.api.tasks.delete(id);
     if (selectedTaskId === id) setSelectedTaskId(null);
     await loadTasks();
+    scheduleDirtySync();
   }
 
   async function addSubtask(parentId: string, title: string) {
@@ -328,6 +355,7 @@ export default function App() {
     if (!parent) return;
     await window.api.tasks.create({ list_id: parent.list_id, parent_id: parentId, title });
     await loadTasks();
+    scheduleDirtySync();
   }
 
   async function createList(name: string) {
@@ -565,7 +593,7 @@ export default function App() {
             { label: "Snooze until next week", onClick: () => snoozeTask(menu.taskId, "nextweek") },
             { label: "Duplicate", onClick: async () => {
                 const t = tasks.find((x) => x.id === menu.taskId);
-                if (t) { await window.api.tasks.create({ list_id: t.list_id, title: `${t.title} (copy)`, notes: t.notes, due_date: t.due_date, priority: t.priority, tags: t.tags }); await loadTasks(); }
+                if (t) { await window.api.tasks.create({ list_id: t.list_id, title: `${t.title} (copy)`, notes: t.notes, due_date: t.due_date, priority: t.priority, tags: t.tags }); await loadTasks(); scheduleDirtySync(); }
               } },
             { label: "Delete", danger: true, onClick: () => deleteTask(menu.taskId) }
           ]}

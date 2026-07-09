@@ -357,13 +357,14 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
               <label className="pref-row" title="Syncs all CalDAV accounts in the background. Manual sync (Ctrl+R) always works too.">
                 Sync automatically every
                 <select
-                  value={prefs.syncIntervalMinutes ?? "5"}
+                  value={prefs.syncIntervalMinutes ?? "60"}
                   onChange={(e) => setPref("syncIntervalMinutes", e.target.value)}
                 >
                   <option value="1">1 minute</option>
                   <option value="5">5 minutes</option>
                   <option value="10">10 minutes</option>
                   <option value="30">30 minutes</option>
+                  <option value="60">60 minutes (Tasks.org default)</option>
                   <option value="0">Off — manual only</option>
                 </select>
               </label>

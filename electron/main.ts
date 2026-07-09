@@ -41,7 +41,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   reminderTime: "18:00", // when date-only tasks fire
   closeToTray: "0", // off by default: the X button really quits; opt in via settings
   launchAtLogin: "0",
-  syncIntervalMinutes: "5", // background auto-sync; "0" = manual only
+  syncIntervalMinutes: "60", // background auto-sync; matches Tasks.org's default; "0" = manual only
   syncHotkey: "CmdOrCtrl+R" // accelerator for Sync Now; "" = no hotkey
 };
 
@@ -99,10 +99,30 @@ function iconPath(name: string): string {
   return path.join(app.getAppPath(), "build", "icons", name);
 }
 
+/** Dev-only: tints an icon orange in memory so a dev/test run is visually
+ *  distinct from an installed production build using the same icon files.
+ *  No-op when packaged, and never touches any file on disk. */
+function devTint(image: Electron.NativeImage): Electron.NativeImage {
+  if (!isDev) return image;
+  const { width, height } = image.getSize();
+  const bitmap = image.toBitmap(); // BGRA
+  for (let i = 0; i < bitmap.length; i += 4) {
+    const b = bitmap[i];
+    const g = bitmap[i + 1];
+    const r = bitmap[i + 2];
+    const a = bitmap[i + 3];
+    if (a === 0) continue; // leave transparent pixels alone
+    bitmap[i] = Math.round(b * 0.3); // B
+    bitmap[i + 1] = Math.round(g * 0.6 + 40); // G
+    bitmap[i + 2] = Math.min(255, Math.round(r * 1.15 + 60)); // R
+  }
+  return nativeImage.createFromBuffer(bitmap, { width, height });
+}
+
 function setupTray() {
   try {
-    tray = new Tray(nativeImage.createFromPath(iconPath("32x32.png")));
-    tray.setToolTip("Tasks Desktop");
+    tray = new Tray(devTint(nativeImage.createFromPath(iconPath("32x32.png"))));
+    tray.setToolTip(isDev ? "Tasks Desktop (dev)" : "Tasks Desktop");
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: "Open Tasks Desktop", click: () => showMainWindow() },
       { type: "separator" },
