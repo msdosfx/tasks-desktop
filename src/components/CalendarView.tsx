@@ -173,6 +173,14 @@ export default function CalendarView({
     ecRef.current = createCalendar(elRef.current, [DayGrid, Interaction], {
       view: "dayGridMonth",
       events: buildEcEvents(),
+      // A day with a lot of tasks/events stretches its whole week row taller
+      // (library behavior, unchanged) -- `dayMaxEvents` turned out
+      // unreliable here (`true` broke an unrelated week's layout, a fixed
+      // number had no visible effect), and capping the day cell's own
+      // height fought the library's row layout too. Instead the mount root
+      // itself scrolls -- see `.calendar-view-grid { overflow-y: auto }` in
+      // styles.css -- so a tall week just makes the grid scrollable instead
+      // of pushing later weeks off screen.
       // @event-calendar/core's built-in time-badge text (driven by its
       // `eventTimeFormat` option) comes out wrong here -- off by the local
       // UTC offset -- even though the Details panel and reminder

@@ -323,6 +323,13 @@ input, textarea, select { user-select: text; }
 .calendar-view-grid {
   flex: 1;
   min-height: 0;
+  /* This is the library's mount root -- it has no built-in scroll, so a busy
+     day that grows its week row taller just silently overflows the fixed-
+     height panel with the rest of the month pushed out of view. Rather than
+     capping individual day cells (tried that -- it fought the library's own
+     row-height layout and produced worse glitches), scroll the whole grid
+     as a unit; row structure inside the library stays untouched. */
+  overflow-y: auto;
   /* Match the app's existing dark palette instead of the library's default
      dark theme colors -- ec-dark class (below) handles most of the rest. */
   --ec-bg-color: #1e1f22;
