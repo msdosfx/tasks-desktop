@@ -48,6 +48,7 @@ export interface CalendarEvent {
   caldav_href: string | null;
   caldav_etag: string | null;
   deleted: 0 | 1;
+  dirty?: 0 | 1;
   created_at: string;
   updated_at: string;
 }
@@ -116,6 +117,9 @@ declare global {
       /** Absent in the Thunderbird add-on shim -- always optional-chain. */
       events?: {
         all: () => Promise<CalendarEvent[]>;
+        create: (input: Partial<CalendarEvent> & { list_id: string; title: string; start_date: string }) => Promise<CalendarEvent>;
+        update: (id: string, patch: Partial<CalendarEvent>) => Promise<CalendarEvent>;
+        delete: (id: string, hard?: boolean) => Promise<void>;
       };
       accounts: {
         all: () => Promise<CaldavAccountPublic[]>;

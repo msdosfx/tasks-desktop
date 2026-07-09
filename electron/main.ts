@@ -26,7 +26,10 @@ import {
   settingSet,
   tasksDueForNotification,
   taskMarkNotified,
-  eventsAll
+  eventsAll,
+  eventCreate,
+  eventUpdate,
+  eventDelete
 } from "./db.js";
 import { testConnection, discoverCalendars, linkListToCalendar, unlinkList, syncAccount, createServerCalendar, encryptPassword } from "./caldav.js";
 
@@ -309,6 +312,9 @@ function registerIpc() {
   ipcMain.handle("tasks:delete", (_e, id: string, hard?: boolean) => taskDelete(id, hard));
 
   ipcMain.handle("events:all", () => eventsAll());
+  ipcMain.handle("events:create", (_e, input: any) => eventCreate(input));
+  ipcMain.handle("events:update", (_e, id: string, patch: any) => eventUpdate(id, patch));
+  ipcMain.handle("events:delete", (_e, id: string, hard?: boolean) => eventDelete(id, hard));
 
   ipcMain.handle("accounts:all", () => accountsAll().map(({ password_enc, ...rest }) => rest));
   ipcMain.handle("accounts:create", (_e, input: any) => {

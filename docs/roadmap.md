@@ -1,16 +1,52 @@
 # Roadmap / ideas to circle back to
 
 ## Next up
+- **Multiple configurable reminders, for tasks AND events** (added 2026-07-09, per explicit user
+  spec): "you should be able to pick a reminder, and multiple reminders and pick at time of, or how
+  many minutes or hours or days before." This is real VALARM support (iCalendar's alarm
+  sub-component) — a task or event can have several reminders, each independently either "at time
+  of" or an offset (N minutes/hours/days before). Current reminder system (`electron/main.ts`
+  `checkReminders()`, `tasksDueForNotification`/`taskMarkNotified` in `db.ts`) is a single global
+  `reminderTime` setting used only for date-only tasks, with a `notified_at` single-timestamp guard
+  — not enough structure for multiple independent reminders per item. Real scope:
+  - New `reminders` table: `id, owner_type ('task'|'event'), owner_id, offset_minutes (0 = at time
+    of, negative = before), fired_at (nullable, replaces the single notified_at column)`.
+  - UI: an "Add reminder" control in both `DetailPanel.tsx` and `EventDetailPanel.tsx`, listing
+    each reminder as a chip/row with a value+unit picker (minutes/hours/days) or "At time of", and a
+    remove button.
+  - Since VALARM is standard iCalendar, reminders could round-trip via CalDAV (embedded in the
+    VTODO/VEVENT's VALARM blocks in `taskToVTodo`/`eventToVEvent`/`parseVTodo`/`parseVEvent`) rather
+    than staying purely local-only — worth doing if feasible, since it'd make reminders survive
+    re-syncing from another client and show up in e.g. DAVx5/Tasks.org too. Needs research into
+    `ical.js`'s VALARM support.
+  - Scheduler rewrite: `checkReminders()` needs to check the new `reminders` table against both
+    tasks' due_date and events' start_date instead of the current tasks-only, single-timestamp logic.
+  - **Recurring events are excluded from this v1** (explicit user decision): they only show their
+    first occurrence on the calendar today (no RRULE expansion yet, see "Recurring event editing"
+    below), so a reminder based on that stale first-occurrence date would fire wrong or not at all.
+    Non-recurring events and all tasks (recurring tasks already advance their due_date correctly via
+    `nextOccurrence` in `taskToggleComplete`) are in scope.
+  - Bigger lift than a quick add — plan and build this as its own pass, likely after the current
+    event-editing work is committed and tested.
 - **Collapsible/resizable right rail** (added 2026-07-09, user said this can wait if it's a big
   lift): let the Today pane + task/event detail column collapse or resize so the calendar grid
   can use the freed width. `.app`'s grid-template-columns is currently fixed (`220px 1fr 320px`
   in styles.css) — would need a collapsed-width state, a toggle button, and the grid template to
   react to it.
-- **Event editing** (added 2026-07-09): calendar events are currently a read-only mirror
-  (`EventDetailPanel.tsx` explicitly says so). User asked for edit capability. Needs: `eventToVEvent`
-  in `electron/ical.ts` (mirroring `taskToVTodo`), a push phase in `caldav.ts`'s `pullEvents` (or a
-  new `pushEvents`) mirroring the task etag/dirty/conflict logic, and an editable form (mirroring
-  `DetailPanel.tsx`, swapping priority/subtasks for location/end-time). Real scope, not a quick add.
+- **Event editing** (added 2026-07-09, IN PROGRESS as of 2026-07-09 later session): calendar events
+  were a read-only mirror (`EventDetailPanel.tsx` explicitly said so). Now building create/edit/delete
+  for non-recurring events: `eventToVEvent` in `electron/ical.ts` (mirroring `taskToVTodo`), a push
+  phase in `caldav.ts` mirroring the task etag/dirty/conflict logic, `dirty` column + CRUD in `db.ts`,
+  IPC in main.ts/preload.cts, and an editable form in `EventDetailPanel.tsx`. Recurring events (has an
+  RRULE) stay read-only in this pass — see "Recurring event editing" below for the follow-up.
+- **Recurring event editing** (added 2026-07-09, per explicit user request — "we are going to want to
+  add recurring events, put it on the game plan"): once non-recurring event CRUD ships, extend it to
+  events with an RRULE. Needs the same single-occurrence-vs-whole-series decision Thunderbird/Outlook/
+  Google Calendar all surface as a prompt ("This event" / "This and following" / "All events") —
+  requires either RECURRENCE-ID exception VEVENTs (edit one occurrence) or rewriting the RRULE (edit
+  the series). Also needs UI for *creating* a new recurring event (recurrence-rule picker), which
+  doesn't exist anywhere in the app yet even for tasks' RRULE support. Bigger lift than plain CRUD —
+  do this only after non-recurring editing has been tested and feels solid.
 - **Per-category colors** (added 2026-07-09): Thunderbird supports assigning a color to each
   category, independent of the calendar/list it's on. Tasks.org doesn't have this. Calendar view
   currently colors tasks/events by their list only (categories have no color anywhere in the app —

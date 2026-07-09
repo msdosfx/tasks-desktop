@@ -4,6 +4,11 @@
 declare module "@event-calendar/core" {
   export interface CalendarInstance {
     setOption(name: string, value: any): void;
+    /** Returns dateClick-shaped info ({ date, allDay, dayEl, ... }) for a
+     *  given viewport point, or null if the point isn't on the calendar. */
+    dateFromPoint(x: number, y: number): { date: Date; allDay: boolean; dayEl: HTMLElement } | null;
+    next(): void;
+    prev(): void;
   }
   export function createCalendar(
     el: HTMLElement,

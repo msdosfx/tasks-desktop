@@ -25,7 +25,10 @@ const api = {
     delete: (id: string, hard?: boolean) => ipcRenderer.invoke("tasks:delete", id, hard)
   },
   events: {
-    all: () => ipcRenderer.invoke("events:all")
+    all: () => ipcRenderer.invoke("events:all"),
+    create: (input: any) => ipcRenderer.invoke("events:create", input),
+    update: (id: string, patch: any) => ipcRenderer.invoke("events:update", id, patch),
+    delete: (id: string, hard?: boolean) => ipcRenderer.invoke("events:delete", id, hard)
   },
   accounts: {
     all: () => ipcRenderer.invoke("accounts:all"),

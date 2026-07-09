@@ -61,6 +61,8 @@ export interface CalendarEvent {
   caldav_href: string | null;
   caldav_etag: string | null;
   deleted: 0 | 1;
+  /** 1 = has local edits not yet pushed to the CalDAV server */
+  dirty: 0 | 1;
   created_at: string;
   updated_at: string;
 }
@@ -180,6 +182,7 @@ function migrate(db: DatabaseSync) {
   try { db.exec(`ALTER TABLE tasks ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE tasks ADD COLUMN notified_at TEXT`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE events ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch { /* already present */ }
+  try { db.exec(`ALTER TABLE events ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
 
   const listCount = db.prepare("SELECT COUNT(*) AS c FROM lists").get() as { c: number };
   if (listCount.c === 0) {
@@ -389,7 +392,7 @@ export function subtasksOf(parentId: string): Task[] {
     .all(parentId) as unknown as Task[];
 }
 
-// ---------- Events (read-only pull from CalDAV VEVENTs; no local create/edit yet) ----------
+// ---------- Events ----------
 export function eventsAll(): CalendarEvent[] {
   return getDb()
     .prepare(`SELECT * FROM events WHERE deleted = 0 ORDER BY start_date ASC`)
@@ -400,6 +403,89 @@ export function eventsByList(listId: string): CalendarEvent[] {
   return getDb()
     .prepare(`SELECT * FROM events WHERE list_id = ? AND deleted = 0 ORDER BY start_date ASC`)
     .all(listId) as unknown as CalendarEvent[];
+}
+
+export function eventGet(id: string): CalendarEvent | undefined {
+  return getDb().prepare(`SELECT * FROM events WHERE id = ?`).get(id) as unknown as CalendarEvent | undefined;
+}
+
+/** Non-recurring only -- creating a recurring event isn't supported yet
+ *  (see docs/roadmap.md "Recurring event editing"). */
+export function eventCreate(input: Partial<CalendarEvent> & { list_id: string; title: string; start_date: string }): CalendarEvent {
+  const db = getDb();
+  const id = nanoid();
+  const now = nowIso();
+  db.prepare(
+    `INSERT INTO events (id, list_id, title, notes, location, start_date, end_date, all_day, recurrence, tags, caldav_uid, caldav_href, caldav_etag, deleted, dirty, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
+  ).run(
+    id,
+    input.list_id,
+    input.title,
+    input.notes ?? "",
+    input.location ?? "",
+    input.start_date,
+    input.end_date ?? null,
+    input.all_day ?? 1,
+    input.recurrence ?? null,
+    input.tags ?? "",
+    input.caldav_uid ?? null,
+    input.caldav_href ?? null,
+    input.caldav_etag ?? null,
+    input.dirty ?? (input.caldav_uid ? 0 : 1),
+    now,
+    now
+  );
+  return eventGet(id)!;
+}
+
+export function eventUpdate(id: string, patch: Partial<CalendarEvent>): CalendarEvent {
+  const db = getDb();
+  const current = eventGet(id);
+  if (!current) throw new Error("Event not found");
+  // Same convention as taskUpdate: an update carrying caldav_etag comes from
+  // the sync engine and leaves the event clean; anything else is a user edit
+  // that still needs pushing.
+  const isSyncUpdate = Object.prototype.hasOwnProperty.call(patch, "caldav_etag");
+  let dirty: 0 | 1;
+  if (patch.dirty !== undefined) dirty = patch.dirty;
+  else if (isSyncUpdate) dirty = 0;
+  else dirty = 1;
+  const merged: CalendarEvent = { ...current, ...patch, dirty, updated_at: nowIso() };
+  db.prepare(
+    `UPDATE events SET list_id=?, title=?, notes=?, location=?, start_date=?, end_date=?, all_day=?,
+     recurrence=?, tags=?, caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, updated_at=?
+     WHERE id=?`
+  ).run(
+    merged.list_id,
+    merged.title,
+    merged.notes,
+    merged.location,
+    merged.start_date,
+    merged.end_date,
+    merged.all_day,
+    merged.recurrence,
+    merged.tags,
+    merged.caldav_uid,
+    merged.caldav_href,
+    merged.caldav_etag,
+    merged.deleted,
+    merged.dirty,
+    merged.updated_at,
+    id
+  );
+  return eventGet(id)!;
+}
+
+/** Soft-deletes a local-only event outright (nothing to push); soft-deletes a
+ *  synced event so the push phase can remove it from the server first. */
+export function eventDelete(id: string, hard = false) {
+  const db = getDb();
+  if (hard) {
+    db.prepare(`DELETE FROM events WHERE id = ?`).run(id);
+  } else {
+    db.prepare(`UPDATE events SET deleted = 1, updated_at = ? WHERE id = ?`).run(nowIso(), id);
+  }
 }
 
 /** All events (including soft-deleted) for a list, keyed by CalDAV uid — used by
@@ -413,12 +499,17 @@ export function eventsByListWithUid(listId: string): Map<string, CalendarEvent> 
   return map;
 }
 
+/** Applies remote content unconditionally -- used for recurring events (still
+ *  read-only, so there's never a local edit to protect) and for brand-new
+ *  events pulled for the first time. Non-recurring events with local edits go
+ *  through `eventUpdate`/`eventCreate` in caldav.ts's etag/dirty-aware sync
+ *  instead, so their `dirty` flag and any conflict copy are handled properly. */
 export function eventUpsertFromRemote(
   listId: string,
   uid: string,
   href: string,
   etag: string,
-  parsed: Omit<CalendarEvent, "id" | "list_id" | "caldav_uid" | "caldav_href" | "caldav_etag" | "deleted" | "created_at" | "updated_at">
+  parsed: Omit<CalendarEvent, "id" | "list_id" | "caldav_uid" | "caldav_href" | "caldav_etag" | "deleted" | "dirty" | "created_at" | "updated_at">
 ): void {
   const db = getDb();
   const now = nowIso();
@@ -428,7 +519,7 @@ export function eventUpsertFromRemote(
   if (existing) {
     db.prepare(
       `UPDATE events SET title=?, notes=?, location=?, start_date=?, end_date=?, all_day=?, recurrence=?, tags=?,
-       caldav_href=?, caldav_etag=?, deleted=0, updated_at=? WHERE id=?`
+       caldav_href=?, caldav_etag=?, deleted=0, dirty=0, updated_at=? WHERE id=?`
     ).run(
       parsed.title,
       parsed.notes,
@@ -445,8 +536,8 @@ export function eventUpsertFromRemote(
     );
   } else {
     db.prepare(
-      `INSERT INTO events (id, list_id, title, notes, location, start_date, end_date, all_day, recurrence, tags, caldav_uid, caldav_href, caldav_etag, deleted, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+      `INSERT INTO events (id, list_id, title, notes, location, start_date, end_date, all_day, recurrence, tags, caldav_uid, caldav_href, caldav_etag, deleted, dirty, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`
     ).run(
       nanoid(),
       listId,
@@ -468,12 +559,15 @@ export function eventUpsertFromRemote(
 }
 
 /** Removes local events for this list whose uid is no longer present remotely
- *  (hard delete — these are a read-only mirror, nothing local to preserve). */
+ *  (hard delete). Skips rows with unpushed local edits (`dirty`) so a
+ *  same-round-trip remote deletion can't silently destroy in-flight edits --
+ *  those get left as a local-only orphan instead, which the push phase will
+ *  simply recreate as a new event on the next sync. */
 export function eventsPruneMissing(listId: string, remoteUids: Set<string>) {
   const db = getDb();
-  const local = db.prepare(`SELECT id, caldav_uid FROM events WHERE list_id = ?`).all(listId) as { id: string; caldav_uid: string | null }[];
+  const local = db.prepare(`SELECT id, caldav_uid, dirty FROM events WHERE list_id = ?`).all(listId) as { id: string; caldav_uid: string | null; dirty: 0 | 1 }[];
   for (const row of local) {
-    if (row.caldav_uid && !remoteUids.has(row.caldav_uid)) {
+    if (row.caldav_uid && !remoteUids.has(row.caldav_uid) && !row.dirty) {
       db.prepare(`DELETE FROM events WHERE id = ?`).run(row.id);
     }
   }

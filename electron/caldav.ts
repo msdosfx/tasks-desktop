@@ -9,6 +9,7 @@ import {
   CaldavAccount,
   TaskList,
   Task,
+  CalendarEvent,
   listsAll,
   listUpdate,
   listCreate,
@@ -16,10 +17,15 @@ import {
   taskCreate,
   taskUpdate,
   taskDelete,
+  eventsByList,
+  eventsByListWithUid,
+  eventCreate,
+  eventUpdate,
+  eventDelete,
   eventUpsertFromRemote,
   eventsPruneMissing
 } from "./db.js";
-import { taskToVTodo, parseVTodo, newUid, ParsedVTodo, parseVEvent } from "./ical.js";
+import { taskToVTodo, parseVTodo, newUid, ParsedVTodo, eventToVEvent, parseVEvent, ParsedVEvent } from "./ical.js";
 
 /** Append a timestamped line to sync.log in the app's user-data folder, so sync
  *  behavior can be diagnosed after the fact. Best-effort: never breaks sync. */
@@ -63,6 +69,25 @@ function sameContent(local: Task, remote: ParsedVTodo): boolean {
     dateEq(local.start_date, remote.start_date) &&
     (local.priority || 0) === (remote.priority || 0) &&
     (local.completed ? 1 : 0) === remote.completed &&
+    norm(local.recurrence) === norm(remote.recurrence) &&
+    tagSet(local.tags) === tagSet(remote.tags)
+  );
+}
+
+/** True when the remote VEVENT carries the same content as the local event.
+ *  Same purpose as `sameContent` for tasks -- an etag-only move (typically our
+ *  own last push) shouldn't be treated as a real remote edit. */
+function sameEventContent(local: CalendarEvent, remote: ParsedVEvent): boolean {
+  const norm = (s: string | null | undefined) => (s ?? "").trim();
+  const tagSet = (s: string | null | undefined) =>
+    norm(s).split(",").map((t) => t.trim()).filter(Boolean).sort().join(",");
+  return (
+    norm(local.title) === norm(remote.title) &&
+    norm(local.notes) === norm(remote.notes) &&
+    norm(local.location) === norm(remote.location) &&
+    dateEq(local.start_date, remote.start_date) &&
+    dateEq(local.end_date, remote.end_date) &&
+    (local.all_day ? 1 : 0) === remote.all_day &&
     norm(local.recurrence) === norm(remote.recurrence) &&
     tagSet(local.tags) === tagSet(remote.tags)
   );
@@ -212,16 +237,21 @@ export async function syncAccount(account: CaldavAccount): Promise<SyncResult[]>
   const results: SyncResult[] = [];
   for (const list of linkedLists) {
     results.push(await syncList(client, list));
-    // Read-only mirror of this calendar's VEVENTs. Runs after task sync,
-    // failures are logged but never surfaced as sync errors (see pullEvents).
-    await pullEvents(client, list);
+    // Two-way sync for this calendar's VEVENTs. Runs after task sync.
+    // Recurring events stay read-only (server always wins); non-recurring
+    // events get the same etag/dirty/conflict handling as tasks. Failures are
+    // logged but never surfaced as sync errors (see syncEvents).
+    await syncEvents(client, list);
   }
   return results;
 }
 
-/** Read-only pull of VEVENTs for a linked list's calendar, for display on the
- *  calendar view. No push phase yet — this app doesn't create/edit events. */
-async function pullEvents(client: Client, list: TaskList) {
+/** Two-way sync of VEVENTs for a linked list's calendar. Recurring events
+ *  (have an RRULE) are still read-only — the server's version always wins, no
+ *  local edits are possible for them yet (see docs/roadmap.md "Recurring
+ *  event editing"). Non-recurring events get full create/edit/delete with the
+ *  same etag/dirty/conflict-copy handling `syncList` uses for tasks. */
+async function syncEvents(client: Client, list: TaskList) {
   const calendarUrl = list.caldav_calendar_url!;
   try {
     const objects = await Promise.race([
@@ -242,26 +272,195 @@ async function pullEvents(client: Client, list: TaskList) {
         setTimeout(() => reject(new Error("fetchCalendarObjects (events) timed out after 15s")), 15000)
       )
     ]);
+    const remoteByUid = new Map<string, { url: string; etag: string; parsed: ParsedVEvent }>();
     const remoteUids = new Set<string>();
     for (const obj of objects) {
       const parsed = parseVEvent(obj.data || "");
       if (!parsed) continue;
       remoteUids.add(parsed.uid);
-      eventUpsertFromRemote(list.id, parsed.uid, obj.url, obj.etag || "", {
-        title: parsed.title,
-        notes: parsed.notes,
-        location: parsed.location,
-        start_date: parsed.start_date,
-        end_date: parsed.end_date,
-        all_day: parsed.all_day,
-        recurrence: parsed.recurrence,
-        tags: parsed.tags
-      });
+      remoteByUid.set(parsed.uid, { url: obj.url, etag: obj.etag || "", parsed });
     }
+
+    // Includes soft-deleted rows (unlike eventsByList) -- a local delete that
+    // hasn't been pushed yet must not be mistaken for "never seen this event"
+    // and resurrected by the pull loop below.
+    const localByUid = eventsByListWithUid(list.id);
+
+    let pulled = 0;
+    let pushed = 0;
+
+    // Pull.
+    for (const [uid, remote] of remoteByUid) {
+      const parsed = remote.parsed;
+      const local = localByUid.get(uid);
+      if (parsed.recurrence) {
+        // Recurring: server always wins, no dirty/conflict handling needed.
+        eventUpsertFromRemote(list.id, uid, remote.url, remote.etag, {
+          title: parsed.title,
+          notes: parsed.notes,
+          location: parsed.location,
+          start_date: parsed.start_date,
+          end_date: parsed.end_date,
+          all_day: parsed.all_day,
+          recurrence: parsed.recurrence,
+          tags: parsed.tags
+        });
+        continue;
+      }
+      if (local?.deleted) {
+        // Already deleted locally, just not pushed yet -- don't resurrect it
+        // here. The push-delete phase below removes it from the server this
+        // same round.
+        continue;
+      }
+      if (!local) {
+        eventCreate({
+          list_id: list.id,
+          title: parsed.title,
+          notes: parsed.notes,
+          location: parsed.location,
+          start_date: parsed.start_date,
+          end_date: parsed.end_date,
+          all_day: parsed.all_day,
+          recurrence: parsed.recurrence,
+          tags: parsed.tags,
+          caldav_uid: uid,
+          caldav_href: remote.url,
+          caldav_etag: remote.etag,
+          dirty: 0
+        });
+        pulled++;
+        continue;
+      }
+      if (local.caldav_etag !== remote.etag) {
+        if (sameEventContent(local, parsed)) {
+          syncLog(`event etag-only catchup for "${local.title}" (${uid}): ${local.caldav_etag} -> ${remote.etag}`);
+          eventUpdate(local.id, { caldav_href: remote.url, caldav_etag: remote.etag });
+          continue;
+        }
+        if (local.dirty) {
+          syncLog(`CONFLICT on event "${local.title}" (${uid}): remote wins, local edits saved as "(conflicted copy)"`);
+          eventCreate({
+            list_id: list.id,
+            title: `${local.title} (conflicted copy)`,
+            notes: local.notes,
+            location: local.location,
+            start_date: local.start_date,
+            end_date: local.end_date,
+            all_day: local.all_day,
+            recurrence: local.recurrence,
+            tags: local.tags,
+            dirty: 1
+          });
+        } else {
+          syncLog(`pull overwrite of clean event "${local.title}" (${uid}): ${local.caldav_etag} -> ${remote.etag}`);
+        }
+        eventUpdate(local.id, {
+          title: parsed.title,
+          notes: parsed.notes,
+          location: parsed.location,
+          start_date: parsed.start_date,
+          end_date: parsed.end_date,
+          all_day: parsed.all_day,
+          recurrence: parsed.recurrence,
+          tags: parsed.tags,
+          caldav_href: remote.url,
+          caldav_etag: remote.etag
+        });
+        pulled++;
+      }
+    }
+
+    // Push: local non-recurring events that are new or have unpushed edits.
+    const needEtagRefresh: { id: string; href: string; title: string }[] = [];
+    const freshLocalEvents = eventsByList(list.id);
+    for (const local of freshLocalEvents) {
+      if (local.recurrence) continue; // v1 doesn't create/edit recurring events
+      if (!local.caldav_uid) {
+        const uid = newUid();
+        const { ics } = eventToVEvent(local, uid);
+        const filename = `${uid}.ics`;
+        try {
+          const created = await client.createCalendarObject({
+            calendar: { url: calendarUrl } as any,
+            filename,
+            iCalString: ics
+          });
+          const href = created.url || `${calendarUrl}${filename}`;
+          const etag = created.headers?.get?.("etag") || null;
+          eventUpdate(local.id, { caldav_uid: uid, caldav_href: href, caldav_etag: etag } as Partial<CalendarEvent>);
+          if (!etag) needEtagRefresh.push({ id: local.id, href, title: local.title });
+          // remoteUids was captured before this push, so it doesn't include
+          // the object we just created -- without this, eventsPruneMissing
+          // below would treat it as "deleted on the server" and hard-delete
+          // the event we just successfully pushed.
+          remoteUids.add(uid);
+          syncLog(`pushed new event "${local.title}" (${uid})${etag ? "" : " — no etag in response"}`);
+          pushed++;
+        } catch (err: any) {
+          syncLog(`push create FAILED for event "${local.title}": ${err?.message || err}`);
+        }
+      } else {
+        if (!local.dirty) continue;
+        const remote = remoteByUid.get(local.caldav_uid);
+        const remoteEtag = remote?.etag ?? null;
+        if (remoteEtag !== local.caldav_etag) {
+          syncLog(`push skipped for dirty event "${local.title}": etag moved this round (${local.caldav_etag} vs ${remoteEtag})`);
+          continue;
+        }
+        const { ics } = eventToVEvent(local);
+        const href = local.caldav_href || remote?.url || "";
+        try {
+          const updated = await client.updateCalendarObject({
+            calendarObject: { url: href, data: ics, etag: local.caldav_etag || "" }
+          });
+          const etag = updated.headers?.get?.("etag") || null;
+          eventUpdate(local.id, { caldav_etag: etag || local.caldav_etag } as Partial<CalendarEvent>);
+          if (!etag) needEtagRefresh.push({ id: local.id, href, title: local.title });
+          syncLog(`pushed update event "${local.title}" (${local.caldav_uid})${etag ? "" : " — no etag in response"}`);
+          pushed++;
+        } catch (err: any) {
+          syncLog(`push update FAILED for event "${local.title}": ${err?.message || err}`);
+        }
+      }
+    }
+
+    if (needEtagRefresh.length) {
+      try {
+        const fresh = await client.fetchCalendarObjects({
+          calendar: { url: calendarUrl } as any,
+          objectUrls: needEtagRefresh.map((o) => o.href)
+        });
+        for (const o of needEtagRefresh) {
+          const obj = fresh.find((f) => samePath(f.url, o.href));
+          if (obj?.etag) eventUpdate(o.id, { caldav_etag: obj.etag } as Partial<CalendarEvent>);
+          syncLog(`etag refresh for event "${o.title}": ${obj?.etag ?? "NOT FOUND"}`);
+        }
+      } catch (err: any) {
+        syncLog(`event etag refresh failed: ${err?.message || err}`);
+      }
+    }
+
+    // Local deletions (soft-deleted events that were already synced).
+    const db = getDb();
+    const deletedWithRemote = db
+      .prepare(`SELECT * FROM events WHERE list_id = ? AND deleted = 1 AND caldav_uid IS NOT NULL`)
+      .all(list.id) as unknown as CalendarEvent[];
+    for (const e of deletedWithRemote) {
+      try {
+        await client.deleteCalendarObject({
+          calendarObject: { url: e.caldav_href || "", etag: e.caldav_etag || "" }
+        });
+      } catch (err: any) {
+        syncLog(`event delete FAILED for "${e.title}": ${err?.message || err}`);
+      }
+      eventDelete(e.id, true);
+    }
+
     eventsPruneMissing(list.id, remoteUids);
-    syncLog(`events: pulled ${remoteUids.size} for list "${list.name}"`);
+    syncLog(`events: synced list "${list.name}" — pulled ${pulled}, pushed ${pushed}`);
   } catch (err: any) {
-    syncLog(`events pull FAILED for list "${list.name}": ${err?.message || err}`);
+    syncLog(`events sync FAILED for list "${list.name}": ${err?.message || err}`);
   }
 }
 

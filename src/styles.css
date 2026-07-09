@@ -242,7 +242,9 @@ input, textarea, select { user-select: text; }
   border-bottom: 1px solid #2c2d30; padding: 12px 16px; max-height: 240px;
   overflow-y: auto; flex: 0 0 auto;
 }
-.today-pane h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: #9aa0a6; }
+.today-pane h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: #9aa0a6; }
+.today-pane-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.today-pane-header .due-filter-select { font-size: 10px; padding: 2px 6px; }
 .today-pane-empty { color: #777; font-size: 12px; margin: 0; }
 .today-pane-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .today-pane-list li { display: flex; align-items: center; gap: 7px; cursor: pointer; font-size: 12px; }
@@ -269,6 +271,11 @@ input, textarea, select { user-select: text; }
   --ec-button-active-bg-color: #4a90d9;
 }
 .calendar-view-grid .task-bar { opacity: 0.85; }
+.calendar-view-grid .ec-selected {
+  opacity: 1 !important;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0, 0, 0, .5) !important;
+  font-weight: 600;
+}
 .detail-panel h3 { margin: 0 0 12px; font-size: 14px; }
 .detail-panel label { display: block; font-size: 11px; color: #9aa0a6; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: .03em; }
 .detail-panel input[type="text"], .detail-panel textarea, .detail-panel select, .detail-panel input[type="date"], .detail-panel input[type="time"], .detail-panel input[type="datetime-local"] {

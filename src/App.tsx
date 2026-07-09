@@ -286,8 +286,11 @@ export default function App() {
     for (const t of tasks) {
       (t.tags || "").split(",").map((c) => c.trim()).filter(Boolean).forEach((c) => seen.add(c));
     }
+    for (const e of events) {
+      (e.tags || "").split(",").map((c) => c.trim()).filter(Boolean).forEach((c) => seen.add(c));
+    }
     return [...seen].sort();
-  }, [tasks]);
+  }, [tasks, events]);
 
   const categoriesInScope = useMemo(() => {
     if (scope === "today") return [];
@@ -306,6 +309,49 @@ export default function App() {
   function defaultListId(): string {
     if (typeof scope === "string" && scope !== "all" && scope !== "today") return scope;
     return lists[0]?.id;
+  }
+
+  /** Prefers the calendar's isolated-list filter (right-click "Show only…")
+   *  when one is set, since that's the calendar the user is currently looking
+   *  at; otherwise falls back to the first list, same as tasks. */
+  function defaultEventListId(): string {
+    if (calendarListFilter !== "all") return calendarListFilter;
+    return lists[0]?.id;
+  }
+
+  async function createEventOnDate(dateStr: string) {
+    const list_id = defaultEventListId();
+    if (!list_id) return;
+    const e = await window.api.events?.create({ list_id, title: "New event", start_date: dateStr, all_day: 1 });
+    if (!e) return;
+    await loadEvents();
+    selectEvent(e.id);
+    scheduleDirtySync();
+  }
+
+  async function updateEvent(id: string, patch: Partial<CalendarEvent>) {
+    await window.api.events?.update(id, patch);
+    await loadEvents();
+    scheduleDirtySync();
+  }
+
+  async function deleteEvent(id: string) {
+    await window.api.events?.delete(id);
+    if (selectedEventId === id) selectEvent(null);
+    await loadEvents();
+    scheduleDirtySync();
+  }
+
+  /** "New Task" on a calendar day's right-click menu -- creates a task due
+   *  that day, using the same list-picking rule as the calendar's own
+   *  new-event creation. */
+  async function createTaskOnDate(dateStr: string) {
+    const list_id = defaultEventListId();
+    if (!list_id) return;
+    const t = await window.api.tasks.create({ list_id, title: "New task", due_date: dateStr });
+    await loadTasks();
+    selectTask(t.id);
+    scheduleDirtySync();
   }
 
   /** Drop `draggedId` in front of `targetId` among its visible siblings and
@@ -542,8 +588,12 @@ export default function App() {
             lists={lists}
             calendarShow={calendarShow}
             onSetCalendarShow={setCalendarShow}
+            selectedTaskId={selectedTaskId}
+            selectedEventId={selectedEventId}
             onSelectTask={selectTask}
             onSelectEvent={selectEvent}
+            onCreateEvent={createEventOnDate}
+            onCreateTask={createTaskOnDate}
             listFilter={calendarListFilter}
             onSetListFilter={setCalendarListFilter}
           />
@@ -652,11 +702,14 @@ export default function App() {
       </div>
 
       <div className="right-rail">
-        <TodayPane tasks={tasks} lists={lists} onSelectTask={selectTask} />
+        <TodayPane tasks={tasks} events={events} lists={lists} onSelectTask={selectTask} onSelectEvent={selectEvent} />
         {selectedEventId ? (
           <EventDetailPanel
             event={events.find((e) => e.id === selectedEventId) || null}
             lists={lists}
+            allCategories={allCategories}
+            onUpdate={updateEvent}
+            onDelete={deleteEvent}
           />
         ) : (
           <DetailPanel

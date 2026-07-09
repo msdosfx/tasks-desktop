@@ -3,6 +3,7 @@ import { createCalendar, destroyCalendar, DayGrid, Interaction } from "@event-ca
 import "@event-calendar/core/index.css";
 import { CalendarEvent, Task, TaskList } from "../types";
 import { selectWidth } from "../selectWidth";
+import ContextMenu from "./ContextMenu";
 
 export type CalendarShow = "both" | "tasks" | "events";
 
@@ -12,8 +13,15 @@ interface Props {
   lists: TaskList[];
   calendarShow: CalendarShow;
   onSetCalendarShow: (v: CalendarShow) => void;
+  selectedTaskId: string | null;
+  selectedEventId: string | null;
   onSelectTask: (id: string) => void;
   onSelectEvent: (id: string) => void;
+  /** Fires with a "YYYY-MM-DD" date, to create a new (non-recurring) event
+   *  there -- double-click a blank day, or "New Event" on its context menu. */
+  onCreateEvent: (dateStr: string) => void;
+  /** "New Task" on a day's context menu -- creates a task due that day. */
+  onCreateTask: (dateStr: string) => void;
   listFilter: string; // "all" or a single list id
   onSetListFilter: (id: string) => void;
 }
@@ -32,18 +40,32 @@ function splitTags(tags: string): string[] {
   return tags.split(",").map((t) => t.trim()).filter(Boolean);
 }
 
+/** "YYYY-MM-DD" from a Date's LOCAL wall-clock date -- deliberately not
+ *  toISOString().slice(0, 10), which converts to UTC and can land on the
+ *  wrong day near midnight in negative-UTC-offset timezones. */
+function localDateStr(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export default function CalendarView({
-  events, tasks, lists, calendarShow, onSetCalendarShow, onSelectTask, onSelectEvent, listFilter, onSetListFilter
+  events, tasks, lists, calendarShow, onSetCalendarShow, selectedTaskId, selectedEventId, onSelectTask, onSelectEvent, onCreateEvent, onCreateTask, listFilter, onSetListFilter
 }: Props) {
   const elRef = useRef<HTMLDivElement>(null);
   const ecRef = useRef<ReturnType<typeof createCalendar> | null>(null);
   const [ready, setReady] = useState(false);
-  // Refs so the mount-once eventClick handler always calls the latest
-  // callback, even though createCalendar() itself only runs once.
+  const [dayMenu, setDayMenu] = useState<{ x: number; y: number; dateStr: string } | null>(null);
+  // Refs so the mount-once eventClick handler and the DOM dblclick/contextmenu
+  // listeners always call the latest callback, even though they're wired up
+  // once and never re-attached.
   const onSelectTaskRef = useRef(onSelectTask);
   const onSelectEventRef = useRef(onSelectEvent);
+  const onCreateEventRef = useRef(onCreateEvent);
+  const onCreateTaskRef = useRef(onCreateTask);
   useEffect(() => { onSelectTaskRef.current = onSelectTask; });
   useEffect(() => { onSelectEventRef.current = onSelectEvent; });
+  useEffect(() => { onCreateEventRef.current = onCreateEvent; });
+  useEffect(() => { onCreateTaskRef.current = onCreateTask; });
   const [categoryFilter, setCategoryFilter] = useState(() => localStorage.getItem("calendarCategoryFilter") || "all");
   const [displayMode, setDisplayMode] = useState<DisplayMode>(
     () => (localStorage.getItem("calendarTaskDisplayMode") as DisplayMode) || "due"
@@ -82,6 +104,7 @@ export default function CalendarView({
           end: e.end_date || e.start_date,
           allDay: !!e.all_day,
           backgroundColor: colorFor(e.list_id),
+          classNames: e.id === selectedEventId ? ["ec-selected"] : [],
           extendedProps: { kind: "event", location: e.location }
         });
       }
@@ -101,7 +124,7 @@ export default function CalendarView({
             end: nextDay(startOnly),
             allDay: true,
             backgroundColor: colorFor(t.list_id),
-            classNames: ["task-bar"],
+            classNames: t.id === selectedTaskId ? ["task-bar", "ec-selected"] : ["task-bar"],
             extendedProps: { kind: "task" }
           });
           continue;
@@ -116,7 +139,7 @@ export default function CalendarView({
           end: nextDay(due),
           allDay: true,
           backgroundColor: colorFor(t.list_id),
-          classNames: ["task-bar"],
+          classNames: t.id === selectedTaskId ? ["task-bar", "ec-selected"] : ["task-bar"],
           extendedProps: { kind: "task" }
         });
       }
@@ -137,7 +160,35 @@ export default function CalendarView({
       }
     });
     setReady(true);
+
+    // A single click is used for selecting tasks/events, so day creation
+    // needs its own gestures (Thunderbird-style): double-click a blank day to
+    // create an event, or right-click for a menu with New Event/New Task/
+    // month navigation. Both are attached as plain DOM listeners since the
+    // Interaction plugin only offers a single-click dateClick.
+    const el = elRef.current;
+    function isOnEvent(target: EventTarget | null): boolean {
+      return !!(target as HTMLElement)?.closest?.(".ec-event");
+    }
+    function onDblClick(e: MouseEvent) {
+      if (isOnEvent(e.target)) return;
+      const info = ecRef.current?.dateFromPoint(e.clientX, e.clientY);
+      if (!info?.date) return;
+      onCreateEventRef.current(localDateStr(info.date));
+    }
+    function onContextMenu(e: MouseEvent) {
+      if (isOnEvent(e.target)) return;
+      const info = ecRef.current?.dateFromPoint(e.clientX, e.clientY);
+      if (!info?.date) return;
+      e.preventDefault();
+      setDayMenu({ x: e.clientX, y: e.clientY, dateStr: localDateStr(info.date) });
+    }
+    el.addEventListener("dblclick", onDblClick);
+    el.addEventListener("contextmenu", onContextMenu);
+
     return () => {
+      el.removeEventListener("dblclick", onDblClick);
+      el.removeEventListener("contextmenu", onContextMenu);
       if (ecRef.current) destroyCalendar(ecRef.current);
       ecRef.current = null;
     };
@@ -150,7 +201,7 @@ export default function CalendarView({
     if (!ready || !ecRef.current) return;
     ecRef.current.setOption("events", buildEcEvents());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, events, tasks, calendarShow, lists, categoryFilter, displayMode, listFilter]);
+  }, [ready, events, tasks, calendarShow, lists, categoryFilter, displayMode, listFilter, selectedTaskId, selectedEventId]);
 
   const displayModeShortLabel: Record<DisplayMode, string> = {
     due: "Tasks: Due",
@@ -225,6 +276,19 @@ export default function CalendarView({
         )}
       </div>
       <div ref={elRef} className="calendar-view-grid ec-dark" />
+      {dayMenu && (
+        <ContextMenu
+          x={dayMenu.x}
+          y={dayMenu.y}
+          onClose={() => setDayMenu(null)}
+          items={[
+            { label: "New Event", onClick: () => onCreateEventRef.current(dayMenu.dateStr) },
+            { label: "New Task", onClick: () => onCreateTaskRef.current(dayMenu.dateStr) },
+            { label: "Previous Month", onClick: () => ecRef.current?.prev() },
+            { label: "Next Month", onClick: () => ecRef.current?.next() }
+          ]}
+        />
+      )}
     </div>
   );
 }

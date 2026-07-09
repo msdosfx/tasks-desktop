@@ -1,6 +1,6 @@
 import ICAL from "ical.js";
 import { nanoid } from "nanoid";
-import type { Task } from "./db.js";
+import type { Task, CalendarEvent } from "./db.js";
 
 // iCal PRIORITY scale: 0 = undefined, 1-4 = high, 5 = medium, 6-9 = low.
 // We store priority on the task as 0 (none), 1 (high), 5 (medium), 9 (low).
@@ -160,9 +160,50 @@ export interface ParsedVEvent {
   tags: string;
 }
 
-/** Parses a VEVENT (read-only — this app doesn't create/edit events yet, only
- *  mirrors them from CalDAV for display). Ignores VEVENTs with no DTSTART,
- *  which aren't meaningfully placeable on a calendar grid. */
+/** Builds an iCalendar VEVENT string from a local event, for pushing to
+ *  CalDAV. Mirrors `taskToVTodo`. The push phase in caldav.ts only calls this
+ *  for non-recurring events -- events with an RRULE stay read-only for now
+ *  (see docs/roadmap.md "Recurring event editing"), but RRULE is still
+ *  round-tripped here in case that changes. */
+export function eventToVEvent(event: CalendarEvent, existingUid?: string): { uid: string; ics: string } {
+  const uid = existingUid || event.caldav_uid || `${event.id}@tasks-desktop`;
+  const comp = new ICAL.Component(["vcalendar", [], []]);
+  comp.updatePropertyWithValue("prodid", "-//Tasks Desktop//EN");
+  comp.updatePropertyWithValue("version", "2.0");
+
+  const vevent = new ICAL.Component("vevent");
+  vevent.updatePropertyWithValue("uid", uid);
+  vevent.updatePropertyWithValue("summary", event.title);
+  if (event.notes) vevent.updatePropertyWithValue("description", event.notes);
+  if (event.location) vevent.updatePropertyWithValue("location", event.location);
+  vevent.updatePropertyWithValue("dtstamp", ICAL.Time.fromJSDate(new Date(event.updated_at), true));
+  vevent.updatePropertyWithValue("dtstart", dateStringToIcalTime(event.start_date));
+  if (event.end_date) {
+    vevent.updatePropertyWithValue("dtend", dateStringToIcalTime(event.end_date));
+  }
+  if (event.recurrence) {
+    try {
+      vevent.updatePropertyWithValue("rrule", ICAL.Recur.fromString(event.recurrence));
+    } catch {
+      // ignore malformed rrule
+    }
+  }
+  const tags = (event.tags || "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (tags.length) {
+    const catProp = new ICAL.Property("categories");
+    catProp.setValues(tags);
+    vevent.addProperty(catProp);
+  }
+
+  comp.addSubcomponent(vevent);
+  return { uid, ics: comp.toString() };
+}
+
+/** Parses a VEVENT. Ignores VEVENTs with no DTSTART, which aren't
+ *  meaningfully placeable on a calendar grid. */
 export function parseVEvent(ics: string): ParsedVEvent | null {
   try {
     const jcal = ICAL.parse(ics);
