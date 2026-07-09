@@ -49,18 +49,72 @@
   `notify:select-task`/`notify:select-event`), IPC in `preload.cts`/`types.ts`, and a
   shared `RemindersEditor.tsx` component wired into both `DetailPanel.tsx` and
   `EventDetailPanel.tsx` (chips + add-reminder control).
-- **Local-only for v1** (explicit decision, informed by research): not synced via CalDAV
-  VALARM. Both Thunderbird and Tasks.org have real VALARM-sync pain (Thunderbird: buggy
+- **Shipped local-only first** (v1, informed by research): not synced via CalDAV VALARM at
+  first. Both Thunderbird and Tasks.org have real VALARM-sync pain (Thunderbird: buggy
   recurring-event dismiss/snooze; Tasks.org: explicitly skips VALARM sync for some CalDAV
-  servers, including Synology — which this user's own "Cal Synology" list runs on). Revisit
-  VALARM round-tripping later if it becomes worth the complexity.
-- **Recurring events excluded from v1** (explicit user decision): unchanged from the original
-  plan above — they only show their first occurrence today (no RRULE expansion), so a
-  reminder anchored to that would fire wrong. `ensureDefaultReminder` skips recurring events
-  on create, and `remindersDueForNotification` skips them defensively too.
+  servers, including Synology — which this user's own "Cal Synology" list runs on).
+- **Recurring events excluded, still true**: they only show their first occurrence today (no
+  RRULE expansion), so a reminder anchored to that would fire wrong. `ensureDefaultReminder`
+  skips recurring events on create, `remindersDueForNotification` skips them defensively too,
+  and the VALARM push/pull below also skips them.
 - A default "at time of" reminder auto-applies on task/event creation (when a due/start date
   is present) and on the specific null→non-null due/start-date transition on edit — but never
   unconditionally on every edit, so deleting the default reminder sticks.
+
+## CalDAV VALARM sync for reminders — DONE (2026-07-09, same day as local-only v1)
+- Per explicit user request ("I do want reminders from this app to work in android with stock
+  calendar/Etar... going to need to implement it pretty soon, even if it has bugs"), reminders
+  now round-trip as VALARM sub-components so Android CalDAV clients (DAVx5 + Etar, Tasks.org
+  mobile, etc.) can see and fire them too.
+- `electron/ical.ts`: `taskToVTodo`/`eventToVEvent` take an optional `reminderOffsets: number[]`
+  and emit one VALARM per offset (`ACTION:DISPLAY`, `TRIGGER` as `ICAL.Duration.fromSeconds
+  (-minutes*60)`); tasks set `RELATED=END` on the trigger since VTODO's default trigger
+  relation is DTSTART but this app's reminders are always due-date-anchored, events need no
+  param since START already matches `start_date`. `parseVTodo`/`parseVEvent` read VALARM
+  triggers back into a `reminderOffsets: number[]` field (only zero/negative relative-duration
+  triggers count as "before"; absolute date-time triggers and positive "after" triggers are
+  ignored, out of scope for this app's model).
+- `electron/db.ts`: `mergeRemindersFromRemote(ownerType, ownerId, offsets)` is **additive
+  only** — adds offsets present on the server but missing locally, never removes anything, and
+  is a complete no-op when `offsets` is empty. This matters because the user's own Synology
+  CalDAV server is known to strip VALARM entirely; a naive replace-on-pull would otherwise wipe
+  every local reminder on every sync. `reminderCreateForOwner`/`reminderDeleteForOwner` wrap the
+  raw CRUD and additionally mark the owning task/event `dirty: 1` so a reminder-only change gets
+  pushed next sync; the raw functions stay dirty-free for `ensureDefaultReminder` and the
+  remote-merge path (avoids a re-push loop). `main.ts`'s `reminders:create`/`reminders:delete`
+  IPC handlers now call the `*ForOwner` versions.
+- `electron/caldav.ts`: push (both create and update paths, tasks and events) fetches
+  `remindersForOwner(...)` and passes the offsets into the serializers. Pull calls
+  `mergeRemindersFromRemote` after a successful create, etag-only catchup, or conflict/overwrite
+  branch — recurring items are skipped throughout, consistent with the reminders-excluded-from-
+  recurring decision above. "(conflicted copy)" tasks/events also carry over the pre-conflict
+  local reminder offsets (via the same additive merge), so a reminder configured locally isn't
+  silently dropped when a conflict copy is created.
+- **Verified working end to end (2026-07-09)**: push tested Tasks Desktop → Thunderbird (VALARM
+  arrived, notification fired in both apps) and pull tested Thunderbird → Tasks Desktop (same).
+  Etar on Android didn't fire, but that's suspected to be an unrelated phone-side notification
+  issue (already seen before with other calendar apps on that device while asleep), not a sync
+  bug — worth a dedicated recheck with the phone awake, but not blocking.
+
+## Calendar month-view time badge showing wrong hour — FIXED (2026-07-09, same session)
+- While testing VALARM above, found a real event/reminder time (e.g. 4:41 PM) displaying as
+  8:41 PM in the calendar month-grid's little time badge, while the Details panel and the
+  reminder notification both showed the correct time. Root cause: `@event-calendar/core`'s
+  built-in time-badge text (driven by its `eventTimeFormat` option/internal `Intl` formatting)
+  comes out wrong for the day-grid month view specifically — off by exactly the local UTC
+  offset — even with a correctly-converted input value and an explicit `timeZone: "UTC"`
+  override on `eventTimeFormat` (confirmed via a live debug log that the value handed to the
+  library was already correct, and via a DevTools console check that plain `Intl` formatting
+  works fine in this environment, so the bug is internal to that one library code path, not our
+  data or the browser's `Intl` support). Rather than keep chasing that internal path, fixed in
+  `CalendarView.tsx` by bypassing it: events are handed to the calendar as floating (no
+  "Z"/offset) local datetime strings via a new `toLocalFloating()` helper (so the library's own
+  timezone-shift math never touches them), and a custom `eventContent` callback renders the
+  time badge itself from `arg.event.start` — which the library exposes as an already
+  correctly-converted local `Date` via its own `toLocalDate()` helper — using a plain
+  `toLocaleTimeString()`, sidestepping the broken formatter entirely. All-day "YYYY-MM-DD"
+  values are unaffected (no time-of-day component to get wrong, and `eventContent` returns
+  `undefined` for them so the library's normal title-only rendering still applies).
 
 ## Lighter runtime than Electron
 - Revisit the earlier discussion about moving off Electron to something lighter.

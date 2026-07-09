@@ -23,7 +23,9 @@ import {
   eventUpdate,
   eventDelete,
   eventUpsertFromRemote,
-  eventsPruneMissing
+  eventsPruneMissing,
+  remindersForOwner,
+  mergeRemindersFromRemote
 } from "./db.js";
 import { taskToVTodo, parseVTodo, newUid, ParsedVTodo, eventToVEvent, parseVEvent, ParsedVEvent } from "./ical.js";
 
@@ -314,7 +316,7 @@ async function syncEvents(client: Client, list: TaskList) {
         continue;
       }
       if (!local) {
-        eventCreate({
+        const created = eventCreate({
           list_id: list.id,
           title: parsed.title,
           notes: parsed.notes,
@@ -329,6 +331,7 @@ async function syncEvents(client: Client, list: TaskList) {
           caldav_etag: remote.etag,
           dirty: 0
         });
+        mergeRemindersFromRemote("event", created.id, parsed.reminderOffsets);
         pulled++;
         continue;
       }
@@ -336,11 +339,13 @@ async function syncEvents(client: Client, list: TaskList) {
         if (sameEventContent(local, parsed)) {
           syncLog(`event etag-only catchup for "${local.title}" (${uid}): ${local.caldav_etag} -> ${remote.etag}`);
           eventUpdate(local.id, { caldav_href: remote.url, caldav_etag: remote.etag });
+          mergeRemindersFromRemote("event", local.id, parsed.reminderOffsets);
           continue;
         }
         if (local.dirty) {
           syncLog(`CONFLICT on event "${local.title}" (${uid}): remote wins, local edits saved as "(conflicted copy)"`);
-          eventCreate({
+          const localOffsets = remindersForOwner("event", local.id).map((r) => r.offset_minutes);
+          const conflictCopy = eventCreate({
             list_id: list.id,
             title: `${local.title} (conflicted copy)`,
             notes: local.notes,
@@ -352,6 +357,10 @@ async function syncEvents(client: Client, list: TaskList) {
             tags: local.tags,
             dirty: 1
           });
+          // The copy exists to preserve local edits that hadn't synced yet --
+          // that includes any reminders configured locally, not just the
+          // core fields above.
+          mergeRemindersFromRemote("event", conflictCopy.id, localOffsets);
         } else {
           syncLog(`pull overwrite of clean event "${local.title}" (${uid}): ${local.caldav_etag} -> ${remote.etag}`);
         }
@@ -367,6 +376,7 @@ async function syncEvents(client: Client, list: TaskList) {
           caldav_href: remote.url,
           caldav_etag: remote.etag
         });
+        mergeRemindersFromRemote("event", local.id, parsed.reminderOffsets);
         pulled++;
       }
     }
@@ -378,7 +388,8 @@ async function syncEvents(client: Client, list: TaskList) {
       if (local.recurrence) continue; // v1 doesn't create/edit recurring events
       if (!local.caldav_uid) {
         const uid = newUid();
-        const { ics } = eventToVEvent(local, uid);
+        const offsets = remindersForOwner("event", local.id).map((r) => r.offset_minutes);
+        const { ics } = eventToVEvent(local, uid, offsets);
         const filename = `${uid}.ics`;
         try {
           const created = await client.createCalendarObject({
@@ -408,7 +419,8 @@ async function syncEvents(client: Client, list: TaskList) {
           syncLog(`push skipped for dirty event "${local.title}": etag moved this round (${local.caldav_etag} vs ${remoteEtag})`);
           continue;
         }
-        const { ics } = eventToVEvent(local);
+        const offsets = remindersForOwner("event", local.id).map((r) => r.offset_minutes);
+        const { ics } = eventToVEvent(local, undefined, offsets);
         const href = local.caldav_href || remote?.url || "";
         try {
           const updated = await client.updateCalendarObject({
@@ -507,7 +519,7 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
       const parsed = parseVTodo(remote.data)!;
       const local = localByUid.get(uid);
       if (!local) {
-        taskCreate({
+        const created = taskCreate({
           list_id: list.id,
           title: parsed.title,
           notes: parsed.notes,
@@ -522,6 +534,7 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
           caldav_href: remote.url,
           caldav_etag: remote.etag
         });
+        mergeRemindersFromRemote("task", created.id, parsed.reminderOffsets);
         result.pulled++;
       } else if (local.caldav_etag !== remote.etag) {
         if (sameContent(local, parsed)) {
@@ -530,6 +543,7 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
           // there is nothing to pull and nothing left to push.
           syncLog(`etag-only catchup for "${local.title}" (${uid}): ${local.caldav_etag} -> ${remote.etag}`);
           taskUpdate(local.id, { caldav_href: remote.url, caldav_etag: remote.etag });
+          mergeRemindersFromRemote("task", local.id, parsed.reminderOffsets);
           continue;
         }
         if (local.dirty) {
@@ -538,7 +552,8 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
           // unsynced task (which the push phase below uploads), so neither
           // side's work is silently lost.
           syncLog(`CONFLICT on "${local.title}" (${uid}): remote wins, local edits saved as "(conflicted copy)"`);
-          taskCreate({
+          const localOffsets = remindersForOwner("task", local.id).map((r) => r.offset_minutes);
+          const conflictCopy = taskCreate({
             list_id: list.id,
             parent_id: local.parent_id,
             title: `${local.title} (conflicted copy)`,
@@ -551,6 +566,10 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
             recurrence: local.recurrence,
             tags: local.tags
           });
+          // The copy exists to preserve local edits that hadn't synced yet --
+          // that includes any reminders configured locally, not just the
+          // core fields above.
+          mergeRemindersFromRemote("task", conflictCopy.id, localOffsets);
         } else {
           syncLog(`pull overwrite of clean task "${local.title}" (${uid}): ${local.caldav_etag} -> ${remote.etag}`);
         }
@@ -567,6 +586,7 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
           caldav_href: remote.url,
           caldav_etag: remote.etag
         });
+        mergeRemindersFromRemote("task", local.id, parsed.reminderOffsets);
         result.pulled++;
       }
     }
@@ -581,7 +601,8 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
       if (local.deleted) continue;
       if (!local.caldav_uid) {
         const uid = newUid();
-        const { ics } = taskToVTodo(local, uid);
+        const offsets = remindersForOwner("task", local.id).map((r) => r.offset_minutes);
+        const { ics } = taskToVTodo(local, uid, offsets);
         const filename = `${uid}.ics`;
         try {
           const created = await client.createCalendarObject({
@@ -616,7 +637,8 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
           syncLog(`push skipped for dirty "${local.title}": etag moved this round (${local.caldav_etag} vs ${remoteEtag})`);
           continue;
         }
-        const { ics } = taskToVTodo(local);
+        const offsets = remindersForOwner("task", local.id).map((r) => r.offset_minutes);
+        const { ics } = taskToVTodo(local, undefined, offsets);
         const href = local.caldav_href || remote?.url || "";
         try {
           const updated = await client.updateCalendarObject({

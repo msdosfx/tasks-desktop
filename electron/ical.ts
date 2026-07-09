@@ -5,7 +5,46 @@ import type { Task, CalendarEvent } from "./db.js";
 // iCal PRIORITY scale: 0 = undefined, 1-4 = high, 5 = medium, 6-9 = low.
 // We store priority on the task as 0 (none), 1 (high), 5 (medium), 9 (low).
 
-export function taskToVTodo(task: Task, existingUid?: string): { uid: string; ics: string } {
+/** Adds one VALARM sub-component per reminder offset. `offsetsMinutes`
+ *  entries are "minutes before" (0 = at time of). `related` forces the
+ *  TRIGGER's RELATED parameter -- VTODO needs "END" since its default
+ *  trigger relation is DTSTART, but this app's reminders are always
+ *  due-date-anchored; VEVENT needs no param since START (== start_date) is
+ *  already the default. */
+function addAlarms(comp: ICAL.Component, offsetsMinutes: number[], related?: "START" | "END") {
+  for (const minutes of offsetsMinutes) {
+    const valarm = new ICAL.Component("valarm");
+    valarm.updatePropertyWithValue("action", "DISPLAY");
+    valarm.updatePropertyWithValue("description", "Reminder");
+    const dur = ICAL.Duration.fromSeconds(-minutes * 60);
+    const triggerProp = valarm.updatePropertyWithValue("trigger", dur);
+    if (related) triggerProp.setParameter("related", related);
+    comp.addSubcomponent(valarm);
+  }
+}
+
+/** Reads VALARM triggers back into "minutes before" offsets. Only relative
+ *  (duration) triggers that are zero or negative (i.e. at-or-before the
+ *  anchor) map onto this app's reminder model; absolute date-time triggers
+ *  and positive/"after" durations are out of scope and skipped. */
+function extractReminderOffsets(parent: ICAL.Component): number[] {
+  const offsets: number[] = [];
+  for (const valarm of parent.getAllSubcomponents("valarm")) {
+    const trigger = valarm.getFirstProperty("trigger");
+    if (!trigger) continue;
+    const val = trigger.getFirstValue();
+    if (!(val instanceof ICAL.Duration)) continue; // absolute date-time trigger -- skip
+    const seconds = val.toSeconds();
+    if (seconds <= 0) offsets.push(Math.round(-seconds / 60));
+  }
+  return offsets;
+}
+
+export function taskToVTodo(
+  task: Task,
+  existingUid?: string,
+  reminderOffsets: number[] = []
+): { uid: string; ics: string } {
   const uid = existingUid || task.caldav_uid || `${task.id}@tasks-desktop`;
   const comp = new ICAL.Component(["vcalendar", [], []]);
   comp.updatePropertyWithValue("prodid", "-//Tasks Desktop//EN");
@@ -48,6 +87,7 @@ export function taskToVTodo(task: Task, existingUid?: string): { uid: string; ic
   if (task.parent_id) {
     vtodo.updatePropertyWithValue("related-to", task.parent_id);
   }
+  addAlarms(vtodo, reminderOffsets, "END");
 
   comp.addSubcomponent(vtodo);
   return { uid, ics: comp.toString() };
@@ -82,6 +122,7 @@ export interface ParsedVTodo {
   recurrence: string | null;
   tags: string;
   updated_at: string;
+  reminderOffsets: number[];
 }
 
 export function parseVTodo(ics: string): ParsedVTodo | null {
@@ -121,7 +162,8 @@ export function parseVTodo(ics: string): ParsedVTodo | null {
       completed_at: completedAt ? completedAt.toJSDate().toISOString() : null,
       recurrence,
       tags,
-      updated_at: dtstamp ? dtstamp.toJSDate().toISOString() : new Date().toISOString()
+      updated_at: dtstamp ? dtstamp.toJSDate().toISOString() : new Date().toISOString(),
+      reminderOffsets: extractReminderOffsets(vtodo)
     };
   } catch (err) {
     console.error("Failed to parse VTODO", err);
@@ -158,6 +200,7 @@ export interface ParsedVEvent {
   all_day: 0 | 1;
   recurrence: string | null;
   tags: string;
+  reminderOffsets: number[];
 }
 
 /** Builds an iCalendar VEVENT string from a local event, for pushing to
@@ -165,7 +208,11 @@ export interface ParsedVEvent {
  *  for non-recurring events -- events with an RRULE stay read-only for now
  *  (see docs/roadmap.md "Recurring event editing"), but RRULE is still
  *  round-tripped here in case that changes. */
-export function eventToVEvent(event: CalendarEvent, existingUid?: string): { uid: string; ics: string } {
+export function eventToVEvent(
+  event: CalendarEvent,
+  existingUid?: string,
+  reminderOffsets: number[] = []
+): { uid: string; ics: string } {
   const uid = existingUid || event.caldav_uid || `${event.id}@tasks-desktop`;
   const comp = new ICAL.Component(["vcalendar", [], []]);
   comp.updatePropertyWithValue("prodid", "-//Tasks Desktop//EN");
@@ -197,6 +244,7 @@ export function eventToVEvent(event: CalendarEvent, existingUid?: string): { uid
     catProp.setValues(tags);
     vevent.addProperty(catProp);
   }
+  addAlarms(vevent, reminderOffsets);
 
   comp.addSubcomponent(vevent);
   return { uid, ics: comp.toString() };
@@ -235,7 +283,8 @@ export function parseVEvent(ics: string): ParsedVEvent | null {
       end_date: dtend ? icalTimeToString(dtend) : null,
       all_day: dtstart.isDate ? 1 : 0,
       recurrence,
-      tags
+      tags,
+      reminderOffsets: extractReminderOffsets(vevent)
     };
   } catch (err) {
     console.error("Failed to parse VEVENT", err);

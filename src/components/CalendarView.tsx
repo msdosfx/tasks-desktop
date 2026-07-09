@@ -40,6 +40,26 @@ function splitTags(tags: string): string[] {
   return tags.split(",").map((t) => t.trim()).filter(Boolean);
 }
 
+/** Strips the timezone off a stored UTC datetime, replacing it with the
+ *  equivalent LOCAL wall-clock digits as a floating (no "Z"/offset) string.
+ *  @event-calendar/core does its own timezone-offset math on whatever string
+ *  it's given, and that math doesn't line up with how its event-time-badge
+ *  text gets formatted (see the `eventTimeFormat` comment where the calendar
+ *  is created) -- feeding it a real UTC "Z" string made the badge show the
+ *  wrong hour (off by the local UTC offset) even though every other place in
+ *  the app (Details panel, reminder notifications) reads the same stored
+ *  value correctly via a plain `new Date(...).getHours()`. Handing the
+ *  library an already-local, offset-free string sidesteps its conversion
+ *  entirely -- there's nothing left for it to (mis)convert. All-day
+ *  "YYYY-MM-DD" values pass through unchanged; they have no time-of-day
+ *  component for this bug to affect. */
+function toLocalFloating(v: string): string {
+  if (v.length <= 10) return v;
+  const d = new Date(v);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 /** "YYYY-MM-DD" from a Date's LOCAL wall-clock date -- deliberately not
  *  toISOString().slice(0, 10), which converts to UTC and can land on the
  *  wrong day near midnight in negative-UTC-offset timezones. */
@@ -100,8 +120,8 @@ export default function CalendarView({
         out.push({
           id: `event-${e.id}`,
           title: e.title,
-          start: e.start_date,
-          end: e.end_date || e.start_date,
+          start: toLocalFloating(e.start_date),
+          end: toLocalFloating(e.end_date || e.start_date),
           allDay: !!e.all_day,
           backgroundColor: colorFor(e.list_id),
           classNames: e.id === selectedEventId ? ["ec-selected"] : [],
@@ -153,6 +173,21 @@ export default function CalendarView({
     ecRef.current = createCalendar(elRef.current, [DayGrid, Interaction], {
       view: "dayGridMonth",
       events: buildEcEvents(),
+      // @event-calendar/core's built-in time-badge text (driven by its
+      // `eventTimeFormat` option) comes out wrong here -- off by the local
+      // UTC offset -- even though the Details panel and reminder
+      // notifications, which just do a plain `new Date(...).getHours()` on
+      // the same stored value, show the correct time. Rather than continuing
+      // to chase the library's internal conversion, render the time badge
+      // ourselves: `arg.event.start`/`.end` here are already a correctly
+      //-converted local `Date` (the library's own `toLocalDate()` helper),
+      // so a plain `toLocaleTimeString` on it is trustworthy.
+      eventContent(arg: any) {
+        if (arg.event.allDay) return undefined; // default (title-only) rendering is fine
+        const timeText = (arg.event.start as Date).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+        const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        return { html: `<time class="ec-event-time">${escape(timeText)}</time><h4 class="ec-event-title">${escape(arg.event.title)}</h4>` };
+      },
       eventClick(info: any) {
         const id = String(info?.event?.id ?? "");
         if (id.startsWith("task-")) onSelectTaskRef.current(id.slice(5));

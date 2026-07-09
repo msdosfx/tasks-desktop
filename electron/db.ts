@@ -728,6 +728,51 @@ function ensureDefaultReminder(ownerType: "task" | "event", ownerId: string) {
   if (count === 0) reminderCreate(ownerType, ownerId, 0);
 }
 
+/** User-facing reminder add/remove -- unlike the raw `reminderCreate`/
+ *  `reminderDelete` (used by `ensureDefaultReminder` and the remote-merge
+ *  path below, neither of which should trigger a re-push), these also mark
+ *  the owning task/event dirty so a reminder-only change gets pushed to
+ *  CalDAV as a VALARM on the next sync. */
+export function reminderCreateForOwner(ownerType: "task" | "event", ownerId: string, offsetMinutes: number): Reminder {
+  const reminder = reminderCreate(ownerType, ownerId, offsetMinutes);
+  if (ownerType === "task") taskUpdate(ownerId, { dirty: 1 });
+  else eventUpdate(ownerId, { dirty: 1 });
+  return reminder;
+}
+
+/** Looks up the reminder's owner before deleting so the IPC surface can stay
+ *  a single `id` argument (matching the existing `reminders:delete` call
+ *  sites in the renderer) while still marking the owner dirty. */
+export function reminderDeleteForOwner(id: string) {
+  const reminder = getDb().prepare(`SELECT * FROM reminders WHERE id = ?`).get(id) as unknown as Reminder | undefined;
+  reminderDelete(id);
+  if (!reminder) return;
+  if (reminder.owner_type === "task") taskUpdate(reminder.owner_id, { dirty: 1 });
+  else eventUpdate(reminder.owner_id, { dirty: 1 });
+}
+
+/** Merges reminder offsets read from a CalDAV VALARM pull into the local
+ *  `reminders` table. Additive-only: only adds offsets that aren't already
+ *  present locally, never removes anything. If `offsets` is empty this is a
+ *  complete no-op -- critical because some CalDAV servers (this app's own
+ *  Synology target included, per prior VALARM research) strip VALARM blocks
+ *  entirely, so a naive "replace local reminders with what the server
+ *  returned" would silently wipe every reminder the user has set on every
+ *  sync. Uses the raw `reminderCreate` (not the *ForOwner wrapper) so this
+ *  never marks the item dirty -- that would cause an immediate re-push and a
+ *  spurious sync loop. */
+export function mergeRemindersFromRemote(ownerType: "task" | "event", ownerId: string, offsets: number[]) {
+  if (offsets.length === 0) return;
+  const existing = remindersForOwner(ownerType, ownerId);
+  const existingOffsets = new Set(existing.map((r) => r.offset_minutes));
+  for (const offset of offsets) {
+    if (!existingOffsets.has(offset)) {
+      reminderCreate(ownerType, ownerId, offset);
+      existingOffsets.add(offset);
+    }
+  }
+}
+
 export interface ReminderDue {
   reminderId: string;
   ownerType: "task" | "event";

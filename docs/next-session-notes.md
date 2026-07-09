@@ -1,6 +1,15 @@
 # Notes for next session
 
-Written 2026-07-09, end of session (reminders feature).
+Updated 2026-07-09 (same session, continued): CalDAV VALARM sync described below as "next" is
+now implemented — `electron/ical.ts` (VALARM serialize/parse + `reminderOffsets` on
+`taskToVTodo`/`eventToVEvent`/`ParsedVTodo`/`ParsedVEvent`), `electron/db.ts`
+(`mergeRemindersFromRemote`, `reminderCreateForOwner`/`reminderDeleteForOwner`),
+`electron/main.ts` (IPC now calls the `*ForOwner` versions), `electron/caldav.ts` (push passes
+offsets into the serializers, pull calls `mergeRemindersFromRemote` on create/etag-catchup/
+conflict-overwrite, conflicted copies carry over local offsets too). See `docs/roadmap.md`'s
+"CalDAV VALARM sync for reminders — DONE" entry for the full writeup. **Not yet done**:
+typecheck/build/dev-test/commit (next terminal steps), and real-device verification against an
+Android CalDAV client (DAVx5/Etar) — untested against a real phone.
 
 ## Reminders — local-only v1 shipped this session, CalDAV VALARM sync is next
 

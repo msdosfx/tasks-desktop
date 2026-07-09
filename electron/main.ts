@@ -29,8 +29,8 @@ import {
   eventUpdate,
   eventDelete,
   remindersForOwner,
-  reminderCreate,
-  reminderDelete,
+  reminderCreateForOwner,
+  reminderDeleteForOwner,
   remindersDueForNotification,
   reminderMarkFired
 } from "./db.js";
@@ -321,9 +321,9 @@ function registerIpc() {
 
   ipcMain.handle("reminders:for", (_e, ownerType: "task" | "event", ownerId: string) => remindersForOwner(ownerType, ownerId));
   ipcMain.handle("reminders:create", (_e, ownerType: "task" | "event", ownerId: string, offsetMinutes: number) =>
-    reminderCreate(ownerType, ownerId, offsetMinutes)
+    reminderCreateForOwner(ownerType, ownerId, offsetMinutes)
   );
-  ipcMain.handle("reminders:delete", (_e, id: string) => reminderDelete(id));
+  ipcMain.handle("reminders:delete", (_e, id: string) => reminderDeleteForOwner(id));
 
   ipcMain.handle("accounts:all", () => accountsAll().map(({ password_enc, ...rest }) => rest));
   ipcMain.handle("accounts:create", (_e, input: any) => {
