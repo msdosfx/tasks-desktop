@@ -24,12 +24,15 @@ import {
   accountDelete,
   settingsAll,
   settingSet,
-  tasksDueForNotification,
-  taskMarkNotified,
   eventsAll,
   eventCreate,
   eventUpdate,
-  eventDelete
+  eventDelete,
+  remindersForOwner,
+  reminderCreate,
+  reminderDelete,
+  remindersDueForNotification,
+  reminderMarkFired
 } from "./db.js";
 import { testConnection, discoverCalendars, linkListToCalendar, unlinkList, syncAccount, createServerCalendar, encryptPassword } from "./caldav.js";
 
@@ -163,25 +166,25 @@ function formatDueForBody(due: string, hh: number, mm: number): string {
 function checkReminders() {
   if (getSetting("notificationsEnabled") !== "1" || !Notification.isSupported()) return;
   const { hh, mm } = parseReminderTime();
-  const due = tasksDueForNotification(hh, mm);
+  const due = remindersDueForNotification(hh, mm);
   if (due.length === 0) return;
   const icon = nativeImage.createFromPath(iconPath("128x128.png"));
   if (due.length > 3) {
     // One pile-up notification (typically right after launch) instead of a burst.
-    const n = new Notification({ title: `${due.length} tasks are due`, body: due.map((t) => t.title).slice(0, 5).join(", ") + (due.length > 5 ? ", …" : ""), icon });
+    const n = new Notification({ title: `${due.length} reminders`, body: due.map((r) => r.title).slice(0, 5).join(", ") + (due.length > 5 ? ", …" : ""), icon });
     n.on("click", () => showMainWindow());
     n.show();
-    for (const t of due) taskMarkNotified(t.id);
+    for (const r of due) reminderMarkFired(r.reminderId);
     return;
   }
-  for (const t of due) {
-    const n = new Notification({ title: t.title, body: `Due ${formatDueForBody(t.due_date!, hh, mm)}`, icon });
+  for (const r of due) {
+    const n = new Notification({ title: r.title, body: `${r.ownerType === "task" ? "Due" : "Starts"} ${formatDueForBody(r.due, hh, mm)}`, icon });
     n.on("click", () => {
       showMainWindow();
-      mainWindow?.webContents.send("notify:select-task", t.id);
+      mainWindow?.webContents.send(r.ownerType === "task" ? "notify:select-task" : "notify:select-event", r.ownerId);
     });
     n.show();
-    taskMarkNotified(t.id);
+    reminderMarkFired(r.reminderId);
   }
 }
 
@@ -315,6 +318,12 @@ function registerIpc() {
   ipcMain.handle("events:create", (_e, input: any) => eventCreate(input));
   ipcMain.handle("events:update", (_e, id: string, patch: any) => eventUpdate(id, patch));
   ipcMain.handle("events:delete", (_e, id: string, hard?: boolean) => eventDelete(id, hard));
+
+  ipcMain.handle("reminders:for", (_e, ownerType: "task" | "event", ownerId: string) => remindersForOwner(ownerType, ownerId));
+  ipcMain.handle("reminders:create", (_e, ownerType: "task" | "event", ownerId: string, offsetMinutes: number) =>
+    reminderCreate(ownerType, ownerId, offsetMinutes)
+  );
+  ipcMain.handle("reminders:delete", (_e, id: string) => reminderDelete(id));
 
   ipcMain.handle("accounts:all", () => accountsAll().map(({ password_enc, ...rest }) => rest));
   ipcMain.handle("accounts:create", (_e, input: any) => {

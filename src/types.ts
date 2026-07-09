@@ -53,6 +53,16 @@ export interface CalendarEvent {
   updated_at: string;
 }
 
+export interface Reminder {
+  id: string;
+  owner_type: "task" | "event";
+  owner_id: string;
+  /** 0 = at time of due/start; >0 = minutes before. */
+  offset_minutes: number;
+  fired_at: string | null;
+  created_at: string;
+}
+
 export interface CaldavAccountPublic {
   id: string;
   label: string;
@@ -120,6 +130,12 @@ declare global {
         create: (input: Partial<CalendarEvent> & { list_id: string; title: string; start_date: string }) => Promise<CalendarEvent>;
         update: (id: string, patch: Partial<CalendarEvent>) => Promise<CalendarEvent>;
         delete: (id: string, hard?: boolean) => Promise<void>;
+      };
+      /** Absent in the Thunderbird add-on shim -- always optional-chain. */
+      reminders?: {
+        for: (ownerType: "task" | "event", ownerId: string) => Promise<Reminder[]>;
+        create: (ownerType: "task" | "event", ownerId: string, offsetMinutes: number) => Promise<Reminder>;
+        delete: (id: string) => Promise<void>;
       };
       accounts: {
         all: () => Promise<CaldavAccountPublic[]>;

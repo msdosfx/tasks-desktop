@@ -1,33 +1,6 @@
 # Roadmap / ideas to circle back to
 
 ## Next up
-- **Multiple configurable reminders, for tasks AND events** (added 2026-07-09, per explicit user
-  spec): "you should be able to pick a reminder, and multiple reminders and pick at time of, or how
-  many minutes or hours or days before." This is real VALARM support (iCalendar's alarm
-  sub-component) — a task or event can have several reminders, each independently either "at time
-  of" or an offset (N minutes/hours/days before). Current reminder system (`electron/main.ts`
-  `checkReminders()`, `tasksDueForNotification`/`taskMarkNotified` in `db.ts`) is a single global
-  `reminderTime` setting used only for date-only tasks, with a `notified_at` single-timestamp guard
-  — not enough structure for multiple independent reminders per item. Real scope:
-  - New `reminders` table: `id, owner_type ('task'|'event'), owner_id, offset_minutes (0 = at time
-    of, negative = before), fired_at (nullable, replaces the single notified_at column)`.
-  - UI: an "Add reminder" control in both `DetailPanel.tsx` and `EventDetailPanel.tsx`, listing
-    each reminder as a chip/row with a value+unit picker (minutes/hours/days) or "At time of", and a
-    remove button.
-  - Since VALARM is standard iCalendar, reminders could round-trip via CalDAV (embedded in the
-    VTODO/VEVENT's VALARM blocks in `taskToVTodo`/`eventToVEvent`/`parseVTodo`/`parseVEvent`) rather
-    than staying purely local-only — worth doing if feasible, since it'd make reminders survive
-    re-syncing from another client and show up in e.g. DAVx5/Tasks.org too. Needs research into
-    `ical.js`'s VALARM support.
-  - Scheduler rewrite: `checkReminders()` needs to check the new `reminders` table against both
-    tasks' due_date and events' start_date instead of the current tasks-only, single-timestamp logic.
-  - **Recurring events are excluded from this v1** (explicit user decision): they only show their
-    first occurrence on the calendar today (no RRULE expansion yet, see "Recurring event editing"
-    below), so a reminder based on that stale first-occurrence date would fire wrong or not at all.
-    Non-recurring events and all tasks (recurring tasks already advance their due_date correctly via
-    `nextOccurrence` in `taskToggleComplete`) are in scope.
-  - Bigger lift than a quick add — plan and build this as its own pass, likely after the current
-    event-editing work is committed and tested.
 - **Collapsible/resizable right rail** (added 2026-07-09, user said this can wait if it's a big
   lift): let the Today pane + task/event detail column collapse or resize so the calendar grid
   can use the freed width. `.app`'s grid-template-columns is currently fixed (`220px 1fr 320px`
@@ -66,6 +39,28 @@
   focuses the task), date-only tasks fire at a configurable time (default 18:00),
   tray icon with close-to-tray, launch at login. Later: snooze buttons ON the
   notification itself, repeating nags for overdue tasks.
+
+## Multiple configurable reminders, for tasks AND events — DONE (2026-07-09)
+- Shipped, per explicit user spec ("multiple reminders and pick at time of, or how many
+  minutes or hours or days before"): a `reminders` table (`owner_type, owner_id,
+  offset_minutes, fired_at`), CRUD + `ensureDefaultReminder`/`remindersDueForNotification`
+  in `db.ts`, `checkReminders()` in `main.ts` rewritten to use it (fires for both tasks
+  and non-recurring events, clicking a notification jumps to the right view/item via
+  `notify:select-task`/`notify:select-event`), IPC in `preload.cts`/`types.ts`, and a
+  shared `RemindersEditor.tsx` component wired into both `DetailPanel.tsx` and
+  `EventDetailPanel.tsx` (chips + add-reminder control).
+- **Local-only for v1** (explicit decision, informed by research): not synced via CalDAV
+  VALARM. Both Thunderbird and Tasks.org have real VALARM-sync pain (Thunderbird: buggy
+  recurring-event dismiss/snooze; Tasks.org: explicitly skips VALARM sync for some CalDAV
+  servers, including Synology — which this user's own "Cal Synology" list runs on). Revisit
+  VALARM round-tripping later if it becomes worth the complexity.
+- **Recurring events excluded from v1** (explicit user decision): unchanged from the original
+  plan above — they only show their first occurrence today (no RRULE expansion), so a
+  reminder anchored to that would fire wrong. `ensureDefaultReminder` skips recurring events
+  on create, and `remindersDueForNotification` skips them defensively too.
+- A default "at time of" reminder auto-applies on task/event creation (when a due/start date
+  is present) and on the specific null→non-null due/start-date transition on edit — but never
+  unconditionally on every edit, so deleting the default reminder sticks.
 
 ## Lighter runtime than Electron
 - Revisit the earlier discussion about moving off Electron to something lighter.

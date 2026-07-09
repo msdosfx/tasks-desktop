@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CalendarEvent, TaskList } from "../types";
+import RemindersEditor, { PendingReminder } from "./RemindersEditor";
 
 interface Props {
   event: CalendarEvent | null;
@@ -54,6 +55,7 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
   const [endTime, setEndTime] = useState("");
   const [notes, setNotes] = useState("");
   const [tags, setTags] = useState("");
+  const [reminders, setReminders] = useState<PendingReminder[]>([]);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
@@ -67,6 +69,13 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
     setNotes(event?.notes ?? "");
     setTags(event?.tags ?? "");
     setDirty(false);
+    if (event?.id) {
+      window.api.reminders?.for("event", event.id).then((rs) => {
+        setReminders(rs.map((r) => ({ id: r.id, offset_minutes: r.offset_minutes })));
+      });
+    } else {
+      setReminders([]);
+    }
   }, [event?.id]);
 
   if (!event) {
@@ -127,10 +136,16 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
     setDirty(true);
   }
 
-  function handleSave() {
+  function setRemindersDirty(next: PendingReminder[]) {
+    setReminders(next);
+    markDirty();
+  }
+
+  async function handleSave() {
+    const id = event!.id;
     const start = joinDateTime(startDate, startTime);
     if (!start) return; // start date is required
-    onUpdate(event!.id, {
+    onUpdate(id, {
       title: title.trim() || event!.title,
       list_id: listId,
       location,
@@ -140,6 +155,19 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
       notes,
       tags
     });
+    // Same batch-save diff as DetailPanel: only touch reminders that were
+    // actually added or removed this session.
+    const existing = await window.api.reminders?.for("event", id);
+    const existingIds = new Set((existing ?? []).map((r) => r.id));
+    const keptIds = new Set(reminders.filter((r) => r.id).map((r) => r.id));
+    for (const r of reminders) {
+      if (!r.id) await window.api.reminders?.create("event", id, r.offset_minutes);
+    }
+    for (const exId of existingIds) {
+      if (!keptIds.has(exId)) await window.api.reminders?.delete(exId);
+    }
+    const refreshed = await window.api.reminders?.for("event", id);
+    setReminders((refreshed ?? []).map((r) => ({ id: r.id, offset_minutes: r.offset_minutes })));
     setDirty(false);
   }
 
@@ -188,6 +216,8 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
           </div>
         </div>
       </div>
+
+      <RemindersEditor reminders={reminders} onChange={setRemindersDirty} anchorLabel="starts" />
 
       <label>Categories</label>
       <datalist id="event-category-suggestions">

@@ -220,6 +220,46 @@ input, textarea, select { user-select: text; }
   opacity: 0.7;
 }
 .category-tag button:hover { opacity: 1; }
+
+/* ---------- Reminders (detail panel) ---------- */
+.reminders-editor { margin-bottom: 10px; }
+.reminder-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+.reminder-empty { font-size: 11px; color: #777; }
+.reminder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #2a3b4d;
+  border: 1px solid #4a90d9;
+  color: #7cb8f0;
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.reminder-chip button {
+  background: none;
+  border: none;
+  color: #7cb8f0;
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.7;
+}
+.reminder-chip button:hover { opacity: 1; }
+.reminder-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.reminder-add-row select { flex: 1; min-width: 100px; }
+.reminder-add-value { width: 52px; flex: none; }
 .category-add-input {
   flex: 1;
   min-width: 80px;

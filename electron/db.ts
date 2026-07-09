@@ -67,6 +67,16 @@ export interface CalendarEvent {
   updated_at: string;
 }
 
+export interface Reminder {
+  id: string;
+  owner_type: "task" | "event";
+  owner_id: string;
+  /** 0 = at time of due/start; >0 = minutes before. */
+  offset_minutes: number;
+  fired_at: string | null;
+  created_at: string;
+}
+
 export interface CaldavAccount {
   id: string;
   label: string;
@@ -174,6 +184,16 @@ function migrate(db: DatabaseSync) {
       value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS reminders (
+      id TEXT PRIMARY KEY,
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      offset_minutes INTEGER NOT NULL DEFAULT 0,
+      fired_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_reminders_owner ON reminders(owner_type, owner_id);
+
     CREATE INDEX IF NOT EXISTS idx_tasks_list ON tasks(list_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
   `);
@@ -183,6 +203,43 @@ function migrate(db: DatabaseSync) {
   try { db.exec(`ALTER TABLE tasks ADD COLUMN notified_at TEXT`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE events ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE events ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
+
+  // One-time (idempotent -- safe to run every launch) backfill: reminders used
+  // to be implicit (every due task notified automatically via the old
+  // tasks.notified_at column). Materialize that as an explicit "at time of"
+  // reminder row per item, so it's editable through the same UI as any other
+  // reminder, without changing default notification behavior.
+  {
+    const now = new Date().toISOString();
+    const tasksNeedingDefault = db
+      .prepare(
+        `SELECT id, notified_at FROM tasks WHERE deleted = 0 AND due_date IS NOT NULL
+         AND id NOT IN (SELECT owner_id FROM reminders WHERE owner_type = 'task')`
+      )
+      .all() as { id: string; notified_at: string | null }[];
+    for (const t of tasksNeedingDefault) {
+      // Preserves whether this task already fired its notification before
+      // reminders existed as their own table.
+      db.prepare(
+        `INSERT INTO reminders (id, owner_type, owner_id, offset_minutes, fired_at, created_at) VALUES (?, 'task', ?, 0, ?, ?)`
+      ).run(nanoid(), t.id, t.notified_at, now);
+    }
+    // Events never had reminders before this feature. Backfilled default
+    // reminders are marked already-fired so existing (possibly long-past)
+    // events don't suddenly send a burst of notifications; only reminders
+    // created going forward (new events, or edits) are live.
+    const eventsNeedingDefault = db
+      .prepare(
+        `SELECT id FROM events WHERE deleted = 0 AND start_date IS NOT NULL AND recurrence IS NULL
+         AND id NOT IN (SELECT owner_id FROM reminders WHERE owner_type = 'event')`
+      )
+      .all() as { id: string }[];
+    for (const e of eventsNeedingDefault) {
+      db.prepare(
+        `INSERT INTO reminders (id, owner_type, owner_id, offset_minutes, fired_at, created_at) VALUES (?, 'event', ?, 0, ?, ?)`
+      ).run(nanoid(), e.id, now, now);
+    }
+  }
 
   const listCount = db.prepare("SELECT COUNT(*) AS c FROM lists").get() as { c: number };
   if (listCount.c === 0) {
@@ -285,6 +342,7 @@ export function taskCreate(input: Partial<Task> & { list_id: string; title: stri
     now,
     now
   );
+  if (input.due_date) ensureDefaultReminder("task", id);
   return taskGet(id)!;
 }
 
@@ -335,6 +393,10 @@ export function taskUpdate(id: string, patch: Partial<Task>): Task {
     merged.updated_at,
     id
   );
+  // A due date freshly set (was null before) gets a default reminder, same as
+  // a brand-new task -- but only on that specific transition, not every edit,
+  // so a deliberately-deleted reminder doesn't come back.
+  if (patch.due_date !== undefined && !current.due_date && merged.due_date) ensureDefaultReminder("task", id);
   return taskGet(id)!;
 }
 
@@ -436,6 +498,8 @@ export function eventCreate(input: Partial<CalendarEvent> & { list_id: string; t
     now,
     now
   );
+  // Recurring events are excluded from reminders in v1.
+  if (!input.recurrence) ensureDefaultReminder("event", id);
   return eventGet(id)!;
 }
 
@@ -474,6 +538,10 @@ export function eventUpdate(id: string, patch: Partial<CalendarEvent>): Calendar
     merged.updated_at,
     id
   );
+  // Edge case reachable via CalDAV pull (not our own UI yet): a recurring
+  // event's recurrence rule is removed on the server, making it eligible for
+  // reminders for the first time.
+  if (patch.recurrence !== undefined && current.recurrence && !merged.recurrence) ensureDefaultReminder("event", id);
   return eventGet(id)!;
 }
 
@@ -625,22 +693,82 @@ export function settingSet(key: string, value: string) {
 }
 
 // ---------- Reminders ----------
-/** Open tasks whose reminder time has arrived and that haven't been notified
- *  for their current due date. Timed tasks fire at their time; date-only tasks
- *  fire at hh:mm (the user's default reminder time) on the due day. */
-export function tasksDueForNotification(hh: number, mm: number): Task[] {
-  const rows = getDb()
-    .prepare(`SELECT * FROM tasks WHERE deleted = 0 AND completed = 0 AND due_date IS NOT NULL AND notified_at IS NULL`)
-    .all() as unknown as Task[];
-  const now = new Date();
-  return rows.filter((t) => {
-    const due = t.due_date!;
-    const fireAt = new Date(due.length <= 10 ? `${due}T00:00:00` : due);
-    if (due.length <= 10) fireAt.setHours(hh, mm, 0, 0);
-    return fireAt <= now;
-  });
+/** All configured reminders for a task or event, soonest-before-due first
+ *  (offset_minutes ascending -- 0 = "at time of" sorts first). */
+export function remindersForOwner(ownerType: "task" | "event", ownerId: string): Reminder[] {
+  return getDb()
+    .prepare(`SELECT * FROM reminders WHERE owner_type = ? AND owner_id = ? ORDER BY offset_minutes ASC`)
+    .all(ownerType, ownerId) as unknown as Reminder[];
 }
 
-export function taskMarkNotified(id: string) {
-  getDb().prepare(`UPDATE tasks SET notified_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
+export function reminderCreate(ownerType: "task" | "event", ownerId: string, offsetMinutes: number): Reminder {
+  const db = getDb();
+  const id = nanoid();
+  const now = nowIso();
+  db.prepare(
+    `INSERT INTO reminders (id, owner_type, owner_id, offset_minutes, fired_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)`
+  ).run(id, ownerType, ownerId, offsetMinutes, now);
+  return db.prepare(`SELECT * FROM reminders WHERE id = ?`).get(id) as unknown as Reminder;
+}
+
+export function reminderDelete(id: string) {
+  getDb().prepare(`DELETE FROM reminders WHERE id = ?`).run(id);
+}
+
+/** Adds a default "at time of" reminder the first time an item gets a
+ *  due/start date, matching the old always-notify behavior. Only called on
+ *  the specific null->non-null transition (see call sites below) -- never
+ *  unconditionally on every edit, since that would silently resurrect a
+ *  reminder the user deliberately deleted. */
+function ensureDefaultReminder(ownerType: "task" | "event", ownerId: string) {
+  const db = getDb();
+  const count = (
+    db.prepare(`SELECT COUNT(*) AS c FROM reminders WHERE owner_type = ? AND owner_id = ?`).get(ownerType, ownerId) as any
+  ).c as number;
+  if (count === 0) reminderCreate(ownerType, ownerId, 0);
+}
+
+export interface ReminderDue {
+  reminderId: string;
+  ownerType: "task" | "event";
+  ownerId: string;
+  title: string;
+  /** The task's due_date / event's start_date this reminder is anchored to. */
+  due: string;
+}
+
+/** Unfired reminders whose fire time has arrived. Date-only anchors (all-day
+ *  tasks/events) fire at hh:mm (the user's default reminder time) on the
+ *  target day, minus the offset; timed anchors fire at their exact time minus
+ *  the offset. Recurring events are excluded from reminders for v1. */
+export function remindersDueForNotification(hh: number, mm: number): ReminderDue[] {
+  const db = getDb();
+  const reminders = db.prepare(`SELECT * FROM reminders WHERE fired_at IS NULL`).all() as unknown as Reminder[];
+  const now = new Date();
+  const due: ReminderDue[] = [];
+  for (const r of reminders) {
+    let anchor: string | null = null;
+    let title = "";
+    if (r.owner_type === "task") {
+      const t = taskGet(r.owner_id);
+      if (!t || t.deleted || t.completed || !t.due_date) continue;
+      anchor = t.due_date;
+      title = t.title;
+    } else {
+      const e = eventGet(r.owner_id);
+      if (!e || e.deleted || e.recurrence) continue;
+      anchor = e.start_date;
+      title = e.title;
+    }
+    const dateOnly = anchor.length <= 10;
+    const anchorDate = new Date(dateOnly ? `${anchor}T00:00:00` : anchor);
+    if (dateOnly) anchorDate.setHours(hh, mm, 0, 0);
+    const fireAt = new Date(anchorDate.getTime() - r.offset_minutes * 60_000);
+    if (fireAt <= now) due.push({ reminderId: r.id, ownerType: r.owner_type, ownerId: r.owner_id, title, due: anchor });
+  }
+  return due;
+}
+
+export function reminderMarkFired(id: string) {
+  getDb().prepare(`UPDATE reminders SET fired_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
 }

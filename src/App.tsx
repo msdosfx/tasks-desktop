@@ -193,7 +193,8 @@ export default function App() {
       window.api.on("shortcut:sync-now", () => runSync()),
       window.api.on("shortcut:open-settings", () => setShowSettings(true)),
       window.api.on("shortcut:open-about", () => setShowAbout(true)),
-      window.api.on("notify:select-task", (id: string) => { setScope("all"); selectTask(id); })
+      window.api.on("notify:select-task", (id: string) => { setScope("all"); setMainView("tasks"); selectTask(id); }),
+      window.api.on("notify:select-event", (id: string) => { setMainView("calendar"); selectEvent(id); })
     ];
     return () => offs.forEach((off) => off());
   }, []);

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Task, TaskList, PRIORITY_LABELS } from "../types";
+import RemindersEditor, { PendingReminder } from "./RemindersEditor";
 
 interface Props {
   task: Task | null;
@@ -56,6 +57,12 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
   const [customRecur, setCustomRecur] = useState("");
   const [tags, setTags] = useState("");
   const [newSubtask, setNewSubtask] = useState("");
+  // New subtask titles typed this edit session, not yet created -- committed
+  // on Save along with everything else in this panel (one save model for the
+  // whole form, matching Thunderbird/Tasks.org rather than auto-saving each
+  // field independently).
+  const [pendingSubtasks, setPendingSubtasks] = useState<string[]>([]);
+  const [reminders, setReminders] = useState<PendingReminder[]>([]);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
@@ -71,7 +78,15 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
     const preset = RECUR_PRESETS.find((p) => p.value === (task?.recurrence ?? null));
     setRecurMode(preset ? preset.label : task?.recurrence ? "custom" : RECUR_PRESETS[0].label);
     setCustomRecur(task?.recurrence ?? "");
+    setPendingSubtasks([]);
     setDirty(false);
+    if (task?.id) {
+      window.api.reminders?.for("task", task.id).then((rs) => {
+        setReminders(rs.map((r) => ({ id: r.id, offset_minutes: r.offset_minutes })));
+      });
+    } else {
+      setReminders([]);
+    }
   }, [task?.id]);
 
   if (!task) {
@@ -82,9 +97,15 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
     setDirty(true);
   }
 
-  function handleSave() {
+  function setRemindersDirty(next: PendingReminder[]) {
+    setReminders(next);
+    markDirty();
+  }
+
+  async function handleSave() {
+    const id = task!.id;
     const recurrence = recurMode === "custom" ? (customRecur || null) : RECUR_PRESETS.find((p) => p.label === recurMode)?.value ?? null;
-    onUpdate(task!.id, {
+    onUpdate(id, {
       title: title.trim() || task!.title,
       notes,
       list_id: listId,
@@ -94,6 +115,23 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
       recurrence,
       tags
     });
+    for (const t of pendingSubtasks) onAddSubtask(id, t);
+    // Diff against what's already in the DB: anything without a real id is
+    // new (create it); anything that dropped out of the working list but
+    // still has a real id was removed (delete it). Untouched existing
+    // reminders need no call at all.
+    const existing = await window.api.reminders?.for("task", id);
+    const existingIds = new Set((existing ?? []).map((r) => r.id));
+    const keptIds = new Set(reminders.filter((r) => r.id).map((r) => r.id));
+    for (const r of reminders) {
+      if (!r.id) await window.api.reminders?.create("task", id, r.offset_minutes);
+    }
+    for (const exId of existingIds) {
+      if (!keptIds.has(exId)) await window.api.reminders?.delete(exId);
+    }
+    const refreshed = await window.api.reminders?.for("task", id);
+    setReminders((refreshed ?? []).map((r) => ({ id: r.id, offset_minutes: r.offset_minutes })));
+    setPendingSubtasks([]);
     setDirty(false);
   }
 
@@ -135,6 +173,8 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
           </div>
         </div>
       </div>
+
+      {dueDate && <RemindersEditor reminders={reminders} onChange={setRemindersDirty} anchorLabel="due" />}
 
       <div className="detail-row">
         <div>
@@ -227,20 +267,38 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
               </span>
             </div>
           ))}
+          {pendingSubtasks.map((t, i) => (
+            <div className="subtask-item" key={`pending-${i}`}>
+              <span className="checkbox" style={{ marginTop: 0, opacity: 0.4 }} title="Not saved yet" />
+              <span style={{ flex: 1, fontStyle: "italic", color: "#9aa0a6" }}>{t}</span>
+              <button
+                className="smart-filter-delete"
+                title="Remove (not yet saved)"
+                onClick={() => setPendingSubtasks(pendingSubtasks.filter((_, idx) => idx !== i))}
+              >×</button>
+            </div>
+          ))}
           <div className="add-subtask">
             <input
               type="text"
-              placeholder="Add subtask and press Enter"
+              placeholder="Add subtask (saved with the rest on Save)"
               value={newSubtask}
               onChange={(e) => setNewSubtask(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && newSubtask.trim()) {
-                  onAddSubtask(task.id, newSubtask.trim());
+                  setPendingSubtasks([...pendingSubtasks, newSubtask.trim()]);
                   setNewSubtask("");
+                  markDirty();
                 }
               }}
             />
-            <button onClick={() => { if (newSubtask.trim()) { onAddSubtask(task.id, newSubtask.trim()); setNewSubtask(""); } }}>Add</button>
+            <button onClick={() => {
+              if (newSubtask.trim()) {
+                setPendingSubtasks([...pendingSubtasks, newSubtask.trim()]);
+                setNewSubtask("");
+                markDirty();
+              }
+            }}>Add</button>
           </div>
         </div>
       )}

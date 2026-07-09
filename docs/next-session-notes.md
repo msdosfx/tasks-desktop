@@ -1,6 +1,57 @@
 # Notes for next session
 
-Written 2026-07-03, end of session.
+Written 2026-07-09, end of session (reminders feature).
+
+## Reminders — local-only v1 shipped this session, CalDAV VALARM sync is next
+
+Built and tested working (user confirmed): multiple configurable reminders per task/event
+("at time of" or N minutes/hours/days before), stored in a new `reminders` table (`electron/db.ts`),
+scheduler rewritten in `electron/main.ts` (`checkReminders()` now uses `remindersDueForNotification`),
+IPC in `preload.cts`/`types.ts`, UI is a shared `RemindersEditor.tsx` component used by both
+`DetailPanel.tsx` (tasks) and `EventDetailPanel.tsx` (non-recurring events). Recurring events are
+excluded from reminders (v1 decision, unchanged — see docs/roadmap.md).
+
+**Also shipped this session**: unified the whole detail-panel save model per explicit user request
+("1 system of logic... either no save button at all, or any change... needs to require a save").
+Chose batch-save (matches Thunderbird/Tasks.org, which the user pointed to as the reference): title/
+notes/dates/priority/tags/recurrence/reminders/new-subtasks are all just local component state until
+you click Save, which commits everything at once (reminders are diffed against the DB — only actual
+adds/removes fire IPC calls). Mark-complete and Delete stay immediate/one-click (destructive/terminal
+actions, not "edits"), per explicit user confirmation.
+
+**Next up, starting fresh next session** (explicit user instruction: "we need reminders to work in
+android with stock calendar/Etar... going to need to implement it pretty soon, even if it has bugs"):
+real CalDAV VALARM support, so reminders round-trip to other CalDAV clients (Android via DAVx5+Etar,
+Tasks.org mobile, etc.), not just stay local. Plan already scoped out (see chat, not yet written to
+roadmap.md — do that first thing next session):
+- `electron/ical.ts`: add VALARM sub-component serialization to `taskToVTodo`/`eventToVEvent` (new
+  optional `reminderOffsets: number[]` param) — `ICAL.Duration.fromSeconds(-minutes*60)` for the
+  TRIGGER value, `ACTION:DISPLAY`, and `RELATED=END` parameter on tasks specifically (VTODO's TRIGGER
+  defaults relate to DTSTART if present, but this app's reminders are always anchored to due_date, so
+  need to force relating to DUE via the RELATED param; events don't need it, START is already the
+  default and matches start_date).
+- `parseVTodo`/`parseVEvent`: extract VALARM triggers back into a `reminderOffsets: number[]` field
+  on `ParsedVTodo`/`ParsedVEvent` (signed `ICAL.Duration.toSeconds()`, only negative/zero triggers
+  count as "N minutes before"; positive/"after" triggers are out of scope, ignore them).
+- `electron/db.ts`: new `mergeRemindersFromRemote(ownerType, ownerId, offsets)` — **additive only,
+  never deletes**. If `offsets` is empty, do nothing at all (critical: the user's own Synology CalDAV
+  server is documented to strip VALARM blocks entirely — see docs/roadmap.md's original VALARM
+  research — so a naive "replace local reminders with what the server returned" would silently wipe
+  every reminder the user has set, every single sync). Only add reminders that are on the server but
+  missing locally.
+- New `reminderCreateForOwner`/`reminderDeleteForOwner` wrapper functions that also mark the owning
+  task/event `dirty: 1` (via `taskUpdate(id, {dirty:1})`/`eventUpdate(id, {dirty:1})`) so a
+  reminder-only change actually gets picked up and pushed next sync. Wire these into the
+  `reminders:create`/`reminders:delete` IPC handlers in `main.ts` (currently call the raw, non-dirty-
+  marking `reminderCreate`/`reminderDelete` — keep those raw versions for `ensureDefaultReminder` and
+  the remote-merge path, which must NOT mark dirty).
+- `electron/caldav.ts`: at push time (both create and update paths, for tasks and events), fetch
+  `remindersForOwner(...)` and pass the offsets into `taskToVTodo`/`eventToVEvent`. At pull time,
+  call `mergeRemindersFromRemote` after a successful create/update/etag-catchup branch.
+- Do this as its own pass, typecheck/build/dev-test before committing, same one-terminal-step-at-a-
+  time workflow as always.
+
+## Older items
 
 ## UI fixes requested
 
@@ -9,12 +60,16 @@ Written 2026-07-03, end of session.
 - ~~Opening the app should trigger a sync; hitting save should trigger a sync~~ — done 2026-07-09 on `experimental` branch, see below.
 - Typing in the search field brings the app to a crawl — investigate performance (likely needs debouncing/memoization) (added 2026-07-04).
 - App has gotten super slow in general — overall performance investigation needed (added 2026-07-04).
-- **Bunch of "(conflicted copy)" tasks appeared** (added 2026-07-09, reported during calendar
-  testing session) — the sync engine creates a "(conflicted copy)" task when a dirty local task's
-  etag has moved remotely since last sync (`syncList` in `electron/caldav.ts`, `CONFLICT on...`
-  log line). Worth checking `sync.log` (userData folder) for how many/why — possibly a false-
-  positive triggered by today's heavy back-to-back testing (multiple dev instances, rapid manual
-  syncs), or a real bug in the etag-comparison logic. Needs investigation, not a quick guess-fix.
+- **"(conflicted copy)" tasks — investigated, looks like real conflicts, not a bug** (added
+  2026-07-09, resolved same day after reviewing `sync.log`). The two conflicts seen ("shim
+  sawmill", "plan water lines with flags") both fired at the first sync after a ~4.5-day gap with
+  no syncs at all (last sync July 5, next sync July 9 13:18). No `etag refresh failed`/`NOT FOUND`
+  lines anywhere in the log, which was the original suspicion — ruled out. Most likely explanation:
+  another device (e.g. phone Tasks.org) edited those two tasks on the server during the gap while
+  the desktop app still had older unpushed local edits to the same tasks. That's a genuine
+  independent-edit conflict, and the sync engine did the right thing (kept the remote version,
+  preserved the local edits as a "(conflicted copy)" task so nothing was lost). No fix needed —
+  just something the user should manually reconcile (merge or delete the copies).
 - Dev/experimental tray icon still not confirmed working (added 2026-07-09): tried an in-memory
   tint and then a real separate file (`build/icons/32x32-dev.png`, orange), wired into
   `setupTray()` in `electron/main.ts` behind `isDev`. Neither changed what the user was seeing.

@@ -30,6 +30,12 @@ const api = {
     update: (id: string, patch: any) => ipcRenderer.invoke("events:update", id, patch),
     delete: (id: string, hard?: boolean) => ipcRenderer.invoke("events:delete", id, hard)
   },
+  reminders: {
+    for: (ownerType: "task" | "event", ownerId: string) => ipcRenderer.invoke("reminders:for", ownerType, ownerId),
+    create: (ownerType: "task" | "event", ownerId: string, offsetMinutes: number) =>
+      ipcRenderer.invoke("reminders:create", ownerType, ownerId, offsetMinutes),
+    delete: (id: string) => ipcRenderer.invoke("reminders:delete", id)
+  },
   accounts: {
     all: () => ipcRenderer.invoke("accounts:all"),
     // Electron has no CORS/host-permission model to satisfy -- see
