@@ -229,7 +229,7 @@ input, textarea, select { user-select: text; }
 .detail-panel { display: flex; flex-direction: column; flex: 1; padding: 16px; overflow-y: auto; min-height: 0; }
 
 /* ---------- View tabs (Tasks / Calendar) ---------- */
-.view-tabs { display: flex; gap: 2px; padding: 8px 16px 0; border-bottom: 1px solid #2c2d30; }
+.view-tabs { display: flex; gap: 2px; padding: 2px 16px 0; border-bottom: 1px solid #2c2d30; }
 .view-tabs button {
   background: transparent; border: none; color: #9aa0a6; cursor: pointer;
   padding: 8px 14px; font-size: 12px; border-radius: 6px 6px 0 0;

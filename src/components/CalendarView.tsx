@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createCalendar, destroyCalendar, DayGrid, Interaction } from "@event-calendar/core";
 import "@event-calendar/core/index.css";
 import { CalendarEvent, Task, TaskList } from "../types";
+import { selectWidth } from "../selectWidth";
 
 export type CalendarShow = "both" | "tasks" | "events";
 
@@ -18,24 +19,6 @@ interface Props {
 }
 
 type DisplayMode = "range" | "due" | "start";
-
-// A single offscreen canvas reused for measuring select text, so each
-// dropdown's closed box can be sized to its current label instead of
-// stretching to the width of its widest option (native <select> behavior).
-let measureCtx: CanvasRenderingContext2D | null | undefined;
-function textWidth(text: string): number {
-  if (measureCtx === undefined) {
-    measureCtx = document.createElement("canvas").getContext("2d");
-    if (measureCtx) measureCtx.font = "12px -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
-  }
-  return measureCtx ? measureCtx.measureText(text).width : text.length * 7;
-}
-/** Width (px) a closed <select> should be so it just fits `label`, with room
- *  for padding/border/the native dropdown arrow. The open dropdown itself
- *  still renders at the width of its widest option -- only the closed box is sized. */
-function selectWidth(label: string): number {
-  return Math.ceil(textWidth(label)) + 34;
-}
 
 /** One day after a date-only string ("YYYY-MM-DD"), for the exclusive `end`
  *  that all-day ranges use (matches iCalendar's own DTEND convention). */
@@ -65,6 +48,9 @@ export default function CalendarView({
   const [displayMode, setDisplayMode] = useState<DisplayMode>(
     () => (localStorage.getItem("calendarTaskDisplayMode") as DisplayMode) || "due"
   );
+  // The display-mode select shows a short label when closed and expands to
+  // the full description while focused/open, then shrinks back on blur.
+  const [displayModeFocused, setDisplayModeFocused] = useState(false);
 
   useEffect(() => { localStorage.setItem("calendarCategoryFilter", categoryFilter); }, [categoryFilter]);
   useEffect(() => { localStorage.setItem("calendarTaskDisplayMode", displayMode); }, [displayMode]);
@@ -166,11 +152,17 @@ export default function CalendarView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, events, tasks, calendarShow, lists, categoryFilter, displayMode, listFilter]);
 
-  const displayModeLabel: Record<DisplayMode, string> = {
+  const displayModeShortLabel: Record<DisplayMode, string> = {
+    due: "Tasks: Due",
+    start: "Tasks: Start",
+    range: "Tasks: Start–Due"
+  };
+  const displayModeFullLabel: Record<DisplayMode, string> = {
     due: "Tasks: Due date only",
     start: "Tasks: Start date only",
     range: "Tasks: Start–due range"
   };
+  const displayModeLabel = displayModeFocused ? displayModeFullLabel : displayModeShortLabel;
   const listFilterLabel = listFilter === "all" ? "List: All" : `List: ${lists.find((l) => l.id === listFilter)?.name ?? "All"}`;
   const showLabel: Record<CalendarShow, string> = {
     both: "Show both",
@@ -198,11 +190,13 @@ export default function CalendarView({
           disabled={!showTasks}
           title="How task dates are drawn on the calendar"
           style={{ width: selectWidth(displayModeLabel[displayMode]) }}
+          onFocus={() => setDisplayModeFocused(true)}
+          onBlur={() => setDisplayModeFocused(false)}
           onChange={(e) => setDisplayMode(e.target.value as DisplayMode)}
         >
-          <option value="due">Tasks: Due date only</option>
-          <option value="start">Tasks: Start date only</option>
-          <option value="range">Tasks: Start–due range</option>
+          <option value="due">{displayModeLabel.due}</option>
+          <option value="start">{displayModeLabel.start}</option>
+          <option value="range">{displayModeLabel.range}</option>
         </select>
         <select
           className="due-filter-select"

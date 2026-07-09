@@ -9,6 +9,7 @@ import CalendarView, { CalendarShow } from "./components/CalendarView";
 import TodayPane from "./components/TodayPane";
 import EventDetailPanel from "./components/EventDetailPanel";
 import { Task, TaskList, CaldavAccountPublic, CalendarEvent } from "./types";
+import { selectWidth } from "./selectWidth";
 
 type Scope = string | "all" | "today";
 type SortMode = "priority" | "due" | "title" | "manual";
@@ -61,6 +62,12 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [showScheduled, setShowScheduled] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>(() => (localStorage.getItem("sortMode") as SortMode) || "priority");
+  // These three toolbar selects show a short label when closed and expand to
+  // the full description while focused/open (same effect as the calendar's
+  // Tasks: Due/Start/Start–Due select).
+  const [dueFocused, setDueFocused] = useState(false);
+  const [categoryFocused, setCategoryFocused] = useState(false);
+  const [sortFocused, setSortFocused] = useState(false);
   const [smartFilters, setSmartFilters] = useState<SmartFilter[]>(loadSmartFilters);
   const [savingView, setSavingView] = useState(false);
   const [viewName, setViewName] = useState("");
@@ -477,6 +484,26 @@ export default function App() {
   const scopeTitle =
     scope === "all" ? "All Tasks" : scope === "today" ? "Today & Overdue" : lists.find((l) => l.id === scope)?.name || "Tasks";
 
+  const dueFilterShortLabel: Record<typeof dueFilter, string> = {
+    all: "Due: All", today: "Due: Today", week: "Due: Week", month: "Due: Month"
+  };
+  const dueFilterFullLabel: Record<typeof dueFilter, string> = {
+    all: "Due: All", today: "Due: Today", week: "Due: This week", month: "Due: This month"
+  };
+  const dueFilterLabel = dueFocused ? dueFilterFullLabel : dueFilterShortLabel;
+
+  const sortModeShortLabel: Record<SortMode, string> = {
+    priority: "Sort: Pri", due: "Sort: Due", title: "Sort: Title", manual: "Sort: Man"
+  };
+  const sortModeFullLabel: Record<SortMode, string> = {
+    priority: "Sort: Priority", due: "Sort: Due date", title: "Sort: Title", manual: "Sort: Manual"
+  };
+  const sortModeLabel = sortFocused ? sortModeFullLabel : sortModeShortLabel;
+
+  const categoryFilterLabel = categoryFilter === "all"
+    ? (categoryFocused ? "Category: All" : "All")
+    : (categoryFocused ? `Category: ${categoryFilter}` : categoryFilter);
+
   return (
     <div className="app">
       <Sidebar
@@ -538,22 +565,28 @@ export default function App() {
             <select
               className="due-filter-select"
               value={dueFilter}
+              style={{ width: selectWidth(dueFilterLabel[dueFilter]) }}
+              onFocus={() => setDueFocused(true)}
+              onBlur={() => setDueFocused(false)}
               onChange={(e) => setDueFilter(e.target.value as typeof dueFilter)}
             >
-              <option value="all">Due: All</option>
-              <option value="today">Due: Today</option>
-              <option value="week">Due: This week</option>
-              <option value="month">Due: This month</option>
+              <option value="all">{dueFilterLabel.all}</option>
+              <option value="today">{dueFilterLabel.today}</option>
+              <option value="week">{dueFilterLabel.week}</option>
+              <option value="month">{dueFilterLabel.month}</option>
             </select>
             {categoriesInScope.length > 0 && (
               <select
                 className="due-filter-select"
                 value={categoryFilter}
+                style={{ width: selectWidth(categoryFilterLabel) }}
+                onFocus={() => setCategoryFocused(true)}
+                onBlur={() => setCategoryFocused(false)}
                 onChange={(e) => setCategoryFilter(e.target.value)}
               >
-                <option value="all">Category: All</option>
+                <option value="all">{categoryFocused ? "Category: All" : "All"}</option>
                 {categoriesInScope.map((c) => (
-                  <option key={c} value={c}>{c}</option>
+                  <option key={c} value={c}>{categoryFocused ? `Category: ${c}` : c}</option>
                 ))}
               </select>
             )}
@@ -561,13 +594,16 @@ export default function App() {
           <select
             className="due-filter-select"
             value={sortMode}
+            style={{ width: selectWidth(sortModeLabel[sortMode]) }}
             title={sortMode === "manual" ? "Drag tasks to reorder them" : "Switch to Manual to drag-reorder tasks"}
+            onFocus={() => setSortFocused(true)}
+            onBlur={() => setSortFocused(false)}
             onChange={(e) => setSortMode(e.target.value as SortMode)}
           >
-            <option value="priority">Sort: Priority</option>
-            <option value="due">Sort: Due date</option>
-            <option value="title">Sort: Title</option>
-            <option value="manual">Sort: Manual</option>
+            <option value="priority">{sortModeLabel.priority}</option>
+            <option value="due">{sortModeLabel.due}</option>
+            <option value="title">{sortModeLabel.title}</option>
+            <option value="manual">{sortModeLabel.manual}</option>
           </select>
           <div className="toolbar-filters-right">
           <label className="hide-completed-toggle">
