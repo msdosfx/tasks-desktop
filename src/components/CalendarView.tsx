@@ -24,6 +24,11 @@ interface Props {
   onCreateTask: (dateStr: string) => void;
   listFilter: string; // "all" or a single list id
   onSetListFilter: (id: string) => void;
+  /** Persist a drag/resize of an event bar (same path the detail panel's
+   *  Save uses -- writes the row + flags it dirty for CalDAV push). */
+  onUpdateEvent: (id: string, patch: Partial<CalendarEvent>) => void;
+  /** Persist a drag/resize of a task bar. */
+  onUpdateTask: (id: string, patch: Partial<Task>) => void;
 }
 
 type DisplayMode = "range" | "due" | "start";
@@ -68,8 +73,25 @@ function localDateStr(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** Shift a stored date value by `deltaMs`, PRESERVING its stored shape so a
+ *  drag/resize round-trips through the same format the rest of the app reads:
+ *  a date-only "YYYY-MM-DD" (all-day items, date-only task due/start) stays
+ *  date-only and moves by whole days; a full datetime stays an ISO UTC string.
+ *  Date-only shifting is done in whole days off a noon anchor so a DST
+ *  transition inside the moved span can't nudge it onto the wrong calendar
+ *  day (midnight ± a DST hour would). */
+function shiftStored(v: string, deltaMs: number): string {
+  if (v.length <= 10) {
+    const days = Math.round(deltaMs / 86400000);
+    const d = new Date(`${v.slice(0, 10)}T12:00:00`);
+    d.setDate(d.getDate() + days);
+    return localDateStr(d);
+  }
+  return new Date(new Date(v).getTime() + deltaMs).toISOString();
+}
+
 export default function CalendarView({
-  events, tasks, lists, calendarShow, onSetCalendarShow, selectedTaskId, selectedEventId, onSelectTask, onSelectEvent, onCreateEvent, onCreateTask, listFilter, onSetListFilter
+  events, tasks, lists, calendarShow, onSetCalendarShow, selectedTaskId, selectedEventId, onSelectTask, onSelectEvent, onCreateEvent, onCreateTask, listFilter, onSetListFilter, onUpdateEvent, onUpdateTask
 }: Props) {
   const elRef = useRef<HTMLDivElement>(null);
   const ecRef = useRef<ReturnType<typeof createCalendar> | null>(null);
@@ -86,6 +108,18 @@ export default function CalendarView({
   useEffect(() => { onSelectEventRef.current = onSelectEvent; });
   useEffect(() => { onCreateEventRef.current = onCreateEvent; });
   useEffect(() => { onCreateTaskRef.current = onCreateTask; });
+  // Same latest-value pattern for the drag/resize handlers, which are wired
+  // once at mount but need the current events/tasks (to read the row being
+  // moved), the current task display mode (which task date a bar maps to),
+  // and the update callbacks.
+  const onUpdateEventRef = useRef(onUpdateEvent);
+  const onUpdateTaskRef = useRef(onUpdateTask);
+  const eventsRef = useRef(events);
+  const tasksRef = useRef(tasks);
+  useEffect(() => { onUpdateEventRef.current = onUpdateEvent; });
+  useEffect(() => { onUpdateTaskRef.current = onUpdateTask; });
+  useEffect(() => { eventsRef.current = events; });
+  useEffect(() => { tasksRef.current = tasks; });
   const [categoryFilter, setCategoryFilter] = useState(() => localStorage.getItem("calendarCategoryFilter") || "all");
   const [displayMode, setDisplayMode] = useState<DisplayMode>(
     () => (localStorage.getItem("calendarTaskDisplayMode") as DisplayMode) || "due"
@@ -107,6 +141,8 @@ export default function CalendarView({
 
   useEffect(() => { localStorage.setItem("calendarCategoryFilter", categoryFilter); }, [categoryFilter]);
   useEffect(() => { localStorage.setItem("calendarTaskDisplayMode", displayMode); }, [displayMode]);
+  const displayModeRef = useRef(displayMode);
+  useEffect(() => { displayModeRef.current = displayMode; });
 
   const showTasks = calendarShow !== "events";
   const showEvents = calendarShow !== "tasks";
@@ -136,6 +172,11 @@ export default function CalendarView({
           allDay: !!e.all_day,
           backgroundColor: colorFor(e.list_id),
           classNames: e.id === selectedEventId ? ["ec-selected"] : [],
+          // Recurring events are whole-series only and show just their first
+          // occurrence today, so dragging one would silently shift the whole
+          // series to a misleading spot -- lock them until per-occurrence
+          // editing + RRULE grid expansion land (see roadmap).
+          editable: !e.recurrence,
           extendedProps: { kind: "event", location: e.location }
         });
       }
@@ -156,6 +197,12 @@ export default function CalendarView({
             allDay: true,
             backgroundColor: colorFor(t.list_id),
             classNames: t.id === selectedTaskId ? ["task-bar", "ec-selected"] : ["task-bar"],
+            // Draggable to reschedule; not resizable in start/due mode -- a
+            // single-day bar has no second date field to grow into (only the
+            // start-due "range" mode does). Recurring tasks stay locked.
+            editable: !t.recurrence,
+            startEditable: !t.recurrence,
+            durationEditable: false,
             extendedProps: { kind: "task" }
           });
           continue;
@@ -171,6 +218,12 @@ export default function CalendarView({
           allDay: true,
           backgroundColor: colorFor(t.list_id),
           classNames: t.id === selectedTaskId ? ["task-bar", "ec-selected"] : ["task-bar"],
+          // Draggable to reschedule. Resizable only in "range" mode, where the
+          // bar spans start_date..due_date and each edge maps to a real field;
+          // "due" mode is a single-day bar with nothing to resize into.
+          editable: !t.recurrence,
+          startEditable: !t.recurrence,
+          durationEditable: displayMode === "range",
           extendedProps: { kind: "task" }
         });
       }
@@ -189,6 +242,13 @@ export default function CalendarView({
       headerToolbar: { start: "title", center: "", end: "prev,next" },
       // Current-time marker line, only shown in the timeGrid week/day views.
       nowIndicator: true,
+      // Enable drag-to-reschedule and edge-resize. Per-event `editable` /
+      // `startEditable` / `durationEditable` flags in buildEcEvents() narrow
+      // this down (recurring items locked, task bars resizable only in range
+      // mode); eventDrop/eventResize below persist the result.
+      editable: true,
+      eventStartEditable: true,
+      eventDurationEditable: true,
       // Default `true` stacks same-time events on top of each other with a
       // slight offset, which makes the ones underneath hard to click in
       // week/day view. `false` lays intersecting events side by side in
@@ -222,6 +282,84 @@ export default function CalendarView({
         const id = String(info?.event?.id ?? "");
         if (id.startsWith("task-")) onSelectTaskRef.current(id.slice(5));
         else if (id.startsWith("event-")) onSelectEventRef.current(id.slice(6));
+      },
+      // Drag a bar to a new day/time. `info.event`/`info.oldEvent` carry the
+      // library's already-local Date start/end; the millisecond diff between
+      // them is the move, applied to the stored value via shiftStored (which
+      // keeps date-only stays-date-only / datetime-stays-ISO). We shift the
+      // *stored* field rather than re-serialize info.event so we don't disturb
+      // all-day end semantics or a null end_date -- except when a drag crosses
+      // the all-day boundary (week/day view has an all-day row), where we must
+      // rebuild from the library dates and flip all_day.
+      eventDrop(info: any) {
+        const id = String(info?.event?.id ?? "");
+        const deltaMs = (info.event.start as Date).getTime() - (info.oldEvent.start as Date).getTime();
+        if (id.startsWith("event-")) {
+          const ev = eventsRef.current.find((e) => e.id === id.slice(6));
+          if (!ev || ev.recurrence) { info.revert?.(); return; }
+          const wasAllDay = !!info.oldEvent.allDay;
+          const nowAllDay = !!info.event.allDay;
+          const patch: Partial<CalendarEvent> = {};
+          if (wasAllDay === nowAllDay) {
+            patch.start_date = shiftStored(ev.start_date, deltaMs);
+            if (ev.end_date) patch.end_date = shiftStored(ev.end_date, deltaMs);
+          } else {
+            patch.all_day = nowAllDay ? 1 : 0;
+            patch.start_date = nowAllDay ? localDateStr(info.event.start) : (info.event.start as Date).toISOString();
+            if (ev.end_date && info.event.end) {
+              patch.end_date = nowAllDay ? localDateStr(info.event.end) : (info.event.end as Date).toISOString();
+            }
+          }
+          onUpdateEventRef.current(ev.id, patch);
+        } else if (id.startsWith("task-")) {
+          const t = tasksRef.current.find((x) => x.id === id.slice(5));
+          if (!t || t.recurrence) { info.revert?.(); return; }
+          const mode = displayModeRef.current;
+          const patch: Partial<Task> = {};
+          if (mode === "start") {
+            if (t.start_date) patch.start_date = shiftStored(t.start_date, deltaMs);
+            else if (t.due_date) patch.due_date = shiftStored(t.due_date, deltaMs);
+          } else if (mode === "range") {
+            // Whole bar moved -- shift both ends that exist by the same delta.
+            if (t.start_date) patch.start_date = shiftStored(t.start_date, deltaMs);
+            if (t.due_date) patch.due_date = shiftStored(t.due_date, deltaMs);
+          } else {
+            // "due" -- the bar is anchored to the due date (start fallback).
+            if (t.due_date) patch.due_date = shiftStored(t.due_date, deltaMs);
+            else if (t.start_date) patch.start_date = shiftStored(t.start_date, deltaMs);
+          }
+          if (Object.keys(patch).length) onUpdateTaskRef.current(t.id, patch);
+          else info.revert?.();
+        }
+      },
+      // Drag an edge to change duration. Resizes report separate startDelta /
+      // endDelta; here we recompute each from the Date diff and move only the
+      // edge(s) that actually changed. Events map to start_date/end_date; task
+      // bars (range mode only, per durationEditable above) map their left edge
+      // to start_date and right edge to due_date.
+      eventResize(info: any) {
+        const id = String(info?.event?.id ?? "");
+        const startDeltaMs = (info.event.start as Date).getTime() - (info.oldEvent.start as Date).getTime();
+        const endDeltaMs = (info.event.end as Date).getTime() - (info.oldEvent.end as Date).getTime();
+        if (id.startsWith("event-")) {
+          const ev = eventsRef.current.find((e) => e.id === id.slice(6));
+          if (!ev || ev.recurrence) { info.revert?.(); return; }
+          const patch: Partial<CalendarEvent> = {};
+          if (startDeltaMs) patch.start_date = shiftStored(ev.start_date, startDeltaMs);
+          if (endDeltaMs) patch.end_date = shiftStored(ev.end_date || ev.start_date, endDeltaMs);
+          if (Object.keys(patch).length) onUpdateEventRef.current(ev.id, patch);
+          else info.revert?.();
+        } else if (id.startsWith("task-")) {
+          const t = tasksRef.current.find((x) => x.id === id.slice(5));
+          if (!t || t.recurrence) { info.revert?.(); return; }
+          const patch: Partial<Task> = {};
+          const startBase = t.start_date || t.due_date;
+          const endBase = t.due_date || t.start_date;
+          if (startDeltaMs && startBase) patch.start_date = shiftStored(startBase, startDeltaMs);
+          if (endDeltaMs && endBase) patch.due_date = shiftStored(endBase, endDeltaMs);
+          if (Object.keys(patch).length) onUpdateTaskRef.current(t.id, patch);
+          else info.revert?.();
+        }
       }
     });
     setReady(true);

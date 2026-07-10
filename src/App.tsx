@@ -634,6 +634,8 @@ export default function App() {
             onCreateTask={createTaskOnDate}
             listFilter={calendarListFilter}
             onSetListFilter={setCalendarListFilter}
+            onUpdateEvent={updateEvent}
+            onUpdateTask={updateTask}
           />
         ) : (
         <>

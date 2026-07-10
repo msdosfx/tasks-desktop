@@ -3,26 +3,15 @@
 ## Next up
 - **Recurring event editing, part 2 — per-occurrence edits** (RRULE picker + whole-series
   create/edit/delete shipped 2026-07-09, see "Recurring event editing" under DONE below). Still
-  needed: the single-occurrence-vs-whole-series prompt ("This event" / "This and following" /
-  "All events") that Thunderbird/Outlook/Google Calendar all surface, which needs RECURRENCE-ID
-  exception VEVENTs. Also, the calendar grid still only shows a recurring event's first
-  occurrence — no RRULE expansion yet (`CalendarView.tsx`'s `buildEcEvents` doesn't do occurrence
+  possible if wanted later: the single-occurrence-vs-whole-series prompt ("This event" / "This and
+  following" / "All events") that Thunderbird/Outlook/Google Calendar all surface, which needs
+  RECURRENCE-ID exception VEVENTs.
+- **RRULE grid expansion — decided against (2026-07-10).** The calendar grid only ever shows a
+  recurring event's first occurrence (`CalendarView.tsx`'s `buildEcEvents` does no occurrence
   math), so a weekly/daily event doesn't visually repeat across the grid even though the RRULE is
-  stored and synced correctly. **Pick this up first thing next session.**
-- **Drag-to-reschedule doesn't persist** (found 2026-07-09): dragging an event to a new day/time
-  on the calendar doesn't update its stored start/end — it either snaps back or just visually
-  moves without saving. Root cause: `CalendarView.tsx` never sets `editable: true` or wires an
-  `eventDrop`/`eventResize` callback on the `createCalendar` options, so nothing persists the
-  drop back to `onUpdate`/CalDAV. Needs an `eventDrop(info)` handler that computes the new
-  start/end from `info.event.start`/`.end` and calls the same `onUpdate` path the detail panel
-  uses (plus the same treatment for task bars, which have their own drag semantics since they're
-  rendered as all-day date ranges, not real events).
-- **Android VALARM notifications still not firing** (retested 2026-07-09 with the zero-duration
-  event fixed/on the correct calendar — still didn't arrive). Cause still unconfirmed; user is
-  going to set up a second Android device to help isolate whether this is phone-specific (the
-  primary test device already has a history of unreliable notifications from other calendar apps)
-  versus something about Tasks Desktop's sync/VALARM output. **Test with the second phone first
-  thing next session.**
+  stored and synced correctly. User decided this isn't wanted — not worth the occurrence-expansion
+  complexity. Leaving whole-series create/edit/delete as the recurring-event story; the RRULE
+  still round-trips to CalDAV, it just isn't drawn on every future date. Parked, not planned.
 - **Collapsible/resizable right rail** (added 2026-07-09, user said this can wait if it's a big
   lift): let the Today pane + task/event detail column collapse or resize so the calendar grid
   can use the freed width. `.app`'s grid-template-columns is currently fixed (`220px 1fr 320px`
@@ -34,6 +23,34 @@
   they're free-text comma-separated tags with no color storage). Worth adding: a `categories` table
   (name, color) + small settings UI, then calendar/task-table coloring could prefer category color
   over list color when a task has one. Deferred for now — calendar view v1 uses list color only.
+
+## Drag-to-reschedule — DONE (2026-07-10)
+- Dragging a bar on the calendar now persists. `CalendarView.tsx` sets `editable: true`
+  (+ `eventStartEditable`/`eventDurationEditable`) and wires `eventDrop`/`eventResize`, which
+  call new `onUpdateEvent`/`onUpdateTask` props (App.tsx passes its existing `updateEvent`/
+  `updateTask` — same write-row-then-flag-dirty path the detail panel Save uses, so drops push
+  to CalDAV on the next sync).
+- A `shiftStored(v, deltaMs)` helper moves a stored value by the drag delta while **preserving
+  its shape**: a date-only "YYYY-MM-DD" stays date-only and shifts by whole days (off a noon
+  anchor so a DST hour can't bump it a day), a full datetime stays an ISO UTC string. Drops shift
+  the stored field by the delta rather than re-serializing the library's date, so all-day end
+  semantics and null `end_date` aren't disturbed — the one exception is a drag that crosses the
+  week/day all-day boundary, where we rebuild start/end from the library dates and flip `all_day`.
+- Task bars map by display mode: "due" shifts `due_date`, "start" shifts `start_date` (due
+  fallback), "range" shifts both ends. Resize is enabled for events (both edges → start/end) and
+  for tasks only in "range" mode (left edge → `start_date`, right edge → `due_date`); single-day
+  "due"/"start" bars set `durationEditable: false` since there's no second field to grow into.
+- **Recurring events/tasks are locked** for drag/resize (`editable: false` per-item, plus a guard
+  in both handlers that calls `info.revert()`): they only render their first occurrence and are
+  whole-series only today, so a drag would silently shift the entire series. Revisit alongside
+  recurring part 2 (per-occurrence edits + RRULE grid expansion) below.
+- Not yet compiler-verified in this session — the sandbox couldn't run `tsc`/`vite` (Windows-
+  installed node_modules lack Linux binaries, and the shell mount was returning truncated file
+  reads). Verified by inspection; run `npm run build` on Windows to confirm.
+
+## Android VALARM notifications — DONE (2026-07-10)
+- Retested and confirmed working (user verified 2026-07-10, second Android device). The earlier
+  non-delivery traced to the primary test phone, not Tasks Desktop's VALARM output.
 
 ## Event editing — DONE (2026-07-09)
 - Calendar events were a read-only mirror (`EventDetailPanel.tsx` explicitly said so). Shipped
