@@ -42,6 +42,9 @@ export interface Task {
   dirty: 0 | 1;
   /** When a reminder notification was last fired for the current due_date. */
   notified_at: string | null;
+  /** iCal SEQUENCE -- bumped on each user-facing edit so CalDAV clients can
+   *  tell a real revision from a no-op re-sync. */
+  sequence: number;
   created_at: string;
   updated_at: string;
 }
@@ -63,6 +66,9 @@ export interface CalendarEvent {
   deleted: 0 | 1;
   /** 1 = has local edits not yet pushed to the CalDAV server */
   dirty: 0 | 1;
+  /** iCal SEQUENCE -- bumped on each user-facing edit so CalDAV clients can
+   *  tell a real revision from a no-op re-sync. */
+  sequence: number;
   created_at: string;
   updated_at: string;
 }
@@ -203,6 +209,8 @@ function migrate(db: DatabaseSync) {
   try { db.exec(`ALTER TABLE tasks ADD COLUMN notified_at TEXT`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE events ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE events ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
+  try { db.exec(`ALTER TABLE tasks ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
+  try { db.exec(`ALTER TABLE events ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
 
   // One-time (idempotent -- safe to run every launch) backfill: reminders used
   // to be implicit (every due task notified automatically via the old
@@ -362,14 +370,17 @@ export function taskUpdate(id: string, patch: Partial<Task>): Task {
   else if (isSyncUpdate) dirty = 0;
   else if (syncIrrelevant) dirty = current.dirty;
   else dirty = 1;
-  const merged: Task = { ...current, ...patch, dirty, updated_at: nowIso() };
+  // Bump SEQUENCE on real content edits (not etag-only sync writes) so remote
+  // CalDAV clients recognize a genuine revision.
+  const sequence = dirty === 1 && !isSyncUpdate ? current.sequence + 1 : current.sequence;
+  const merged: Task = { ...current, ...patch, dirty, sequence, updated_at: nowIso() };
   // A new due date (edit, snooze, recurrence advance, or a change pulled from
   // the server) gets a fresh reminder.
   if (patch.due_date !== undefined && patch.due_date !== current.due_date) merged.notified_at = null;
   db.prepare(
     `UPDATE tasks SET list_id=?, parent_id=?, title=?, notes=?, due_date=?, start_date=?,
      priority=?, completed=?, completed_at=?, recurrence=?, tags=?, sort_order=?,
-     caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, notified_at=?, updated_at=?
+     caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, sequence=?, notified_at=?, updated_at=?
      WHERE id=?`
   ).run(
     merged.list_id,
@@ -389,6 +400,7 @@ export function taskUpdate(id: string, patch: Partial<Task>): Task {
     merged.caldav_etag,
     merged.deleted,
     merged.dirty,
+    merged.sequence,
     merged.notified_at,
     merged.updated_at,
     id
@@ -515,10 +527,13 @@ export function eventUpdate(id: string, patch: Partial<CalendarEvent>): Calendar
   if (patch.dirty !== undefined) dirty = patch.dirty;
   else if (isSyncUpdate) dirty = 0;
   else dirty = 1;
-  const merged: CalendarEvent = { ...current, ...patch, dirty, updated_at: nowIso() };
+  // Bump SEQUENCE on real content edits (not etag-only sync writes) so remote
+  // CalDAV clients recognize a genuine revision.
+  const sequence = dirty === 1 && !isSyncUpdate ? current.sequence + 1 : current.sequence;
+  const merged: CalendarEvent = { ...current, ...patch, dirty, sequence, updated_at: nowIso() };
   db.prepare(
     `UPDATE events SET list_id=?, title=?, notes=?, location=?, start_date=?, end_date=?, all_day=?,
-     recurrence=?, tags=?, caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, updated_at=?
+     recurrence=?, tags=?, caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, sequence=?, updated_at=?
      WHERE id=?`
   ).run(
     merged.list_id,
@@ -535,6 +550,7 @@ export function eventUpdate(id: string, patch: Partial<CalendarEvent>): Calendar
     merged.caldav_etag,
     merged.deleted,
     merged.dirty,
+    merged.sequence,
     merged.updated_at,
     id
   );
@@ -577,7 +593,7 @@ export function eventUpsertFromRemote(
   uid: string,
   href: string,
   etag: string,
-  parsed: Omit<CalendarEvent, "id" | "list_id" | "caldav_uid" | "caldav_href" | "caldav_etag" | "deleted" | "dirty" | "created_at" | "updated_at">
+  parsed: Omit<CalendarEvent, "id" | "list_id" | "caldav_uid" | "caldav_href" | "caldav_etag" | "deleted" | "dirty" | "sequence" | "created_at" | "updated_at">
 ): void {
   const db = getDb();
   const now = nowIso();
@@ -715,17 +731,21 @@ export function reminderDelete(id: string) {
   getDb().prepare(`DELETE FROM reminders WHERE id = ?`).run(id);
 }
 
-/** Adds a default "at time of" reminder the first time an item gets a
- *  due/start date, matching the old always-notify behavior. Only called on
- *  the specific null->non-null transition (see call sites below) -- never
- *  unconditionally on every edit, since that would silently resurrect a
+/** Adds a default reminder the first time an item gets a due/start date. Only
+ *  called on the specific null->non-null transition (see call sites below) --
+ *  never unconditionally on every edit, since that would silently resurrect a
  *  reminder the user deliberately deleted. */
+const DEFAULT_REMINDER_LEAD_MINUTES = 15;
 function ensureDefaultReminder(ownerType: "task" | "event", ownerId: string) {
   const db = getDb();
   const count = (
     db.prepare(`SELECT COUNT(*) AS c FROM reminders WHERE owner_type = ? AND owner_id = ?`).get(ownerType, ownerId) as any
   ).c as number;
-  if (count === 0) reminderCreate(ownerType, ownerId, 0);
+  // 15 min before (matches Thunderbird's default). A non-zero lead also keeps
+  // the alarm safely in the future by the time DAVx5 pulls the event to the
+  // phone -- a 0-min ("at time of") default can already be past-due on arrival,
+  // and Android silently drops past-due alarms rather than firing them late.
+  if (count === 0) reminderCreate(ownerType, ownerId, DEFAULT_REMINDER_LEAD_MINUTES);
 }
 
 /** User-facing reminder add/remove -- unlike the raw `reminderCreate`/

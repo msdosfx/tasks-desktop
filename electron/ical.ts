@@ -58,6 +58,8 @@ export function taskToVTodo(
   vtodo.updatePropertyWithValue("status", task.completed ? "COMPLETED" : "NEEDS-ACTION");
   vtodo.updatePropertyWithValue("percent-complete", task.completed ? 100 : 0);
   vtodo.updatePropertyWithValue("dtstamp", ICAL.Time.fromJSDate(new Date(task.updated_at), true));
+  vtodo.updatePropertyWithValue("last-modified", ICAL.Time.fromJSDate(new Date(task.updated_at), true));
+  vtodo.updatePropertyWithValue("sequence", task.sequence ?? 0);
 
   if (task.due_date) {
     vtodo.updatePropertyWithValue("due", dateStringToIcalTime(task.due_date));
@@ -224,6 +226,8 @@ export function eventToVEvent(
   if (event.notes) vevent.updatePropertyWithValue("description", event.notes);
   if (event.location) vevent.updatePropertyWithValue("location", event.location);
   vevent.updatePropertyWithValue("dtstamp", ICAL.Time.fromJSDate(new Date(event.updated_at), true));
+  vevent.updatePropertyWithValue("last-modified", ICAL.Time.fromJSDate(new Date(event.updated_at), true));
+  vevent.updatePropertyWithValue("sequence", event.sequence ?? 0);
   vevent.updatePropertyWithValue("dtstart", dateStringToIcalTime(event.start_date));
   if (event.end_date) {
     vevent.updatePropertyWithValue("dtend", dateStringToIcalTime(event.end_date));
