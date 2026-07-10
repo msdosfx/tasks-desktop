@@ -5,6 +5,11 @@ A non-touch, mouse-and-keyboard desktop app that reimplements the core functiona
 Electron + React + TypeScript app, with two-way CalDAV sync so it can share data with your existing
 Tasks.org mobile setup (DAVx5 / Nextcloud / any Tasks.org-compatible CalDAV server).
 
+> **Beta software.** This project is still in active development and hasn't reached a stable 1.0 yet.
+> Expect rough edges and bugs, and keep a backup of anything important — while sync is two-way, you
+> shouldn't rely on this as the only copy of your tasks until a v1.0 release. Bug reports are welcome
+> on the [issue tracker](https://github.com/msdosfx/tasks-desktop/issues).
+
 ## Installation
 
 Grab the latest build for your platform from the
@@ -108,17 +113,28 @@ npm run package  # build + bundle as DMG / NSIS installer / deb + flatpak via el
 - Tasks: title, notes, start date, due date, priority (None/High/Medium/Low), tags, recurrence (RRULE,
   with quick presets for daily/weekly/monthly/yearly plus a custom-RRULE field)
 - Subtasks (one level), shown nested under their parent and in the detail panel
+- Calendar view: month/week/day views showing tasks and events together, with a tasks/events/both
+  toggle, task display modes (due date, start date, or start→due range), and list/category filters.
+  Double-click or right-click a day or time slot to create an item there; drag a bar to reschedule it
+  (drag an edge to resize)
+- Calendar events: create/edit/delete events, including recurring events (whole-series) via the same
+  RRULE presets tasks use — all synced two-way over CalDAV
+- Reminders & notifications: multiple reminders per task/event (at time, or minutes/hours/days before),
+  native desktop notifications that jump to the item when clicked, synced as CalDAV VALARMs so Android
+  clients (DAVx5 + Etar, Tasks.org mobile) can fire them too
+- Collapsible sidebar and right rail (with re-expand tabs) to give the calendar/list more room
 - Search across title/notes/tags, right-click context menu (complete/duplicate/delete), keyboard
   shortcuts (Ctrl+N new task, Ctrl+Shift+N new list, Ctrl+F search, Ctrl+R sync, N new task, Delete to
   remove the selected task) — fully mouse/keyboard driven, no touch gestures anywhere
 - CalDAV accounts screen: add a server (label, URL, username, password/app-token), test the connection,
   discover its calendars, and link any local list to a remote calendar
-- Two-way sync engine (`electron/caldav.ts`): pulls new/changed remote VTODOs into the local DB, pushes
-  new/changed local tasks to the server, and propagates local deletions
+- Two-way sync engine (`electron/caldav.ts`): pulls new/changed remote VTODOs/VEVENTs into the local DB,
+  pushes new/changed local tasks and events to the server, and propagates local deletions
 
 ## Known limitations / next steps
 - Sync conflicts (same task edited on two devices between syncs) keep the server version on the synced
   task and preserve the local edits as a "(conflicted copy)" task; there's no merge UI yet.
 - Only one level of subtasks is modeled (no infinitely nested subtasks).
-- No notifications/reminders yet (Tasks.org supports local notifications; this would need
-  `Notification` API + a due-date scheduler in the main process).
+- Recurring events are edited as a whole series only (no per-occurrence exceptions), and the calendar
+  grid draws a recurring event on its first occurrence rather than expanding it across every date; the
+  RRULE itself is stored and synced correctly.
