@@ -279,6 +279,12 @@ async function syncEvents(client: Client, list: TaskList) {
     for (const obj of objects) {
       const parsed = parseVEvent(obj.data || "");
       if (!parsed) continue;
+      // TEMP diagnostic -- comparing Tasks Desktop's own pushed VALARM
+      // against Thunderbird's, to see why Android isn't firing ours. Remove
+      // once resolved.
+      if ((obj.data || "").includes("VALARM")) {
+        syncLog(`VALARM-DEBUG event "${parsed.title}":\n${obj.data}`);
+      }
       remoteUids.add(parsed.uid);
       remoteByUid.set(parsed.uid, { url: obj.url, etag: obj.etag || "", parsed });
     }
@@ -381,11 +387,14 @@ async function syncEvents(client: Client, list: TaskList) {
       }
     }
 
-    // Push: local non-recurring events that are new or have unpushed edits.
+    // Push: local events that are new or have unpushed edits, recurring or
+    // not. Recurring events are edited/pushed as a whole series -- any edit
+    // rewrites the single master VEVENT's RRULE, there's no per-occurrence
+    // exception support (RECURRENCE-ID) yet. See docs/roadmap.md "Recurring
+    // event editing" for the follow-up if per-occurrence edits are wanted.
     const needEtagRefresh: { id: string; href: string; title: string }[] = [];
     const freshLocalEvents = eventsByList(list.id);
     for (const local of freshLocalEvents) {
-      if (local.recurrence) continue; // v1 doesn't create/edit recurring events
       if (!local.caldav_uid) {
         const uid = newUid();
         const offsets = remindersForOwner("event", local.id).map((r) => r.offset_minutes);
@@ -508,6 +517,12 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
     for (const obj of objects) {
       const parsed = parseVTodo(obj.data || "");
       if (parsed) remoteByUid.set(parsed.uid, { url: obj.url, etag: obj.etag || "", data: obj.data || "" });
+      // TEMP diagnostic -- comparing Tasks Desktop's own pushed VALARM
+      // against Thunderbird's, to see why Android isn't firing ours. Remove
+      // once resolved.
+      if (parsed && (obj.data || "").includes("VALARM")) {
+        syncLog(`VALARM-DEBUG task "${parsed.title}":\n${obj.data}`);
+      }
     }
 
     const localTasks = tasksByList(list.id);

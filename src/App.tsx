@@ -338,7 +338,18 @@ export default function App() {
   async function createEventOnDate(dateStr: string) {
     const list_id = defaultEventListId();
     if (!list_id) return;
-    const e = await window.api.events?.create({ list_id, title: "New event", start_date: dateStr, all_day: 1 });
+    // A full ISO datetime (from a week/day-view time-slot click) carries a
+    // real start time -- default a 1-hour span, editable after in the panel.
+    // A plain "YYYY-MM-DD" (month-view day click) stays an all-day event,
+    // same as before.
+    const hasTime = dateStr.length > 10;
+    const e = await window.api.events?.create({
+      list_id,
+      title: "New event",
+      start_date: dateStr,
+      all_day: hasTime ? 0 : 1,
+      end_date: hasTime ? new Date(new Date(dateStr).getTime() + 60 * 60 * 1000).toISOString() : null
+    });
     if (!e) return;
     await loadEvents();
     selectEvent(e.id);
@@ -360,11 +371,20 @@ export default function App() {
 
   /** "New Task" on a calendar day's right-click menu -- creates a task due
    *  that day, using the same list-picking rule as the calendar's own
-   *  new-event creation. */
+   *  new-event creation. A full ISO datetime (week/day-view time-slot click)
+   *  carries a real time, so it's used as the start with the due date
+   *  defaulted a 1-hour span later, same as events -- a plain "YYYY-MM-DD"
+   *  (month-view day click) stays a due-date-only task, same as before. */
   async function createTaskOnDate(dateStr: string) {
     const list_id = defaultEventListId();
     if (!list_id) return;
-    const t = await window.api.tasks.create({ list_id, title: "New task", due_date: dateStr });
+    const hasTime = dateStr.length > 10;
+    const t = await window.api.tasks.create({
+      list_id,
+      title: "New task",
+      due_date: hasTime ? new Date(new Date(dateStr).getTime() + 60 * 60 * 1000).toISOString() : dateStr,
+      start_date: hasTime ? dateStr : null
+    });
     await loadTasks();
     selectTask(t.id);
     scheduleDirtySync();

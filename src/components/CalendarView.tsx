@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createCalendar, destroyCalendar, DayGrid, Interaction } from "@event-calendar/core";
+import { createCalendar, destroyCalendar, DayGrid, TimeGrid, Interaction } from "@event-calendar/core";
 import "@event-calendar/core/index.css";
 import { CalendarEvent, Task, TaskList } from "../types";
 import { selectWidth } from "../selectWidth";
@@ -93,6 +93,17 @@ export default function CalendarView({
   // The display-mode select shows a short label when closed and expands to
   // the full description while focused/open, then shrinks back on blur.
   const [displayModeFocused, setDisplayModeFocused] = useState(false);
+  // Month/week/day toggle -- replaces the library's default "today" header
+  // button (see headerToolbar in the mount effect below), which sat there
+  // not doing anything useful for this app. Week/day use the TimeGrid
+  // plugin's hourly views (not DayGrid's dayGridWeek) so hours of the day
+  // actually show, rather than just a strip of day cells like month view.
+  const CAL_VIEWS: { view: "dayGridMonth" | "timeGridWeek" | "timeGridDay"; label: string }[] = [
+    { view: "dayGridMonth", label: "Month" },
+    { view: "timeGridWeek", label: "Week" },
+    { view: "timeGridDay", label: "Day" }
+  ];
+  const [calView, setCalView] = useState<"dayGridMonth" | "timeGridWeek" | "timeGridDay">("dayGridMonth");
 
   useEffect(() => { localStorage.setItem("calendarCategoryFilter", categoryFilter); }, [categoryFilter]);
   useEffect(() => { localStorage.setItem("calendarTaskDisplayMode", displayMode); }, [displayMode]);
@@ -170,8 +181,19 @@ export default function CalendarView({
   // Mount once.
   useEffect(() => {
     if (!elRef.current) return;
-    ecRef.current = createCalendar(elRef.current, [DayGrid, Interaction], {
-      view: "dayGridMonth",
+    ecRef.current = createCalendar(elRef.current, [DayGrid, TimeGrid, Interaction], {
+      view: calView,
+      // Default is `{start: 'title', center: '', end: 'today prev,next'}` --
+      // drop "today" since our own Month/Week/Day toggle button (in
+      // .calendar-view-toolbar below) replaces it.
+      headerToolbar: { start: "title", center: "", end: "prev,next" },
+      // Current-time marker line, only shown in the timeGrid week/day views.
+      nowIndicator: true,
+      // Default `true` stacks same-time events on top of each other with a
+      // slight offset, which makes the ones underneath hard to click in
+      // week/day view. `false` lays intersecting events side by side in
+      // their own columns instead -- each stays independently clickable.
+      slotEventOverlap: false,
       events: buildEcEvents(),
       // A day with a lot of tasks/events stretches its whole week row taller
       // (library behavior, unchanged) -- `dayMaxEvents` turned out
@@ -213,18 +235,28 @@ export default function CalendarView({
     function isOnEvent(target: EventTarget | null): boolean {
       return !!(target as HTMLElement)?.closest?.(".ec-event");
     }
+    // In month view, dateFromPoint's `date` is midnight with no meaningful
+    // time-of-day (allDay: true) -- only a plain "YYYY-MM-DD" makes sense
+    // there. In week/day view, a click inside the hourly grid carries a real
+    // time (allDay: false), so the full instant is passed through as an ISO
+    // string instead, which createEventOnDate/createTaskOnDate (App.tsx)
+    // detect via string length to prefill the time field and default a
+    // 1-hour span.
+    function pointToStr(info: { date: Date; allDay: boolean }): string {
+      return info.allDay ? localDateStr(info.date) : info.date.toISOString();
+    }
     function onDblClick(e: MouseEvent) {
       if (isOnEvent(e.target)) return;
       const info = ecRef.current?.dateFromPoint(e.clientX, e.clientY);
       if (!info?.date) return;
-      onCreateEventRef.current(localDateStr(info.date));
+      onCreateEventRef.current(pointToStr(info));
     }
     function onContextMenu(e: MouseEvent) {
       if (isOnEvent(e.target)) return;
       const info = ecRef.current?.dateFromPoint(e.clientX, e.clientY);
       if (!info?.date) return;
       e.preventDefault();
-      setDayMenu({ x: e.clientX, y: e.clientY, dateStr: localDateStr(info.date) });
+      setDayMenu({ x: e.clientX, y: e.clientY, dateStr: pointToStr(info) });
     }
     el.addEventListener("dblclick", onDblClick);
     el.addEventListener("contextmenu", onContextMenu);
@@ -245,6 +277,11 @@ export default function CalendarView({
     ecRef.current.setOption("events", buildEcEvents());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, events, tasks, calendarShow, lists, categoryFilter, displayMode, listFilter, selectedTaskId, selectedEventId]);
+
+  useEffect(() => {
+    if (!ready || !ecRef.current) return;
+    ecRef.current.setOption("view", calView);
+  }, [ready, calView]);
 
   const displayModeShortLabel: Record<DisplayMode, string> = {
     due: "Tasks: Due",
@@ -267,6 +304,15 @@ export default function CalendarView({
   return (
     <div className="calendar-view">
       <div className="calendar-view-toolbar">
+        <select
+          className="due-filter-select"
+          value={calView}
+          title="Switch between month, week, and day view"
+          style={{ width: selectWidth(CAL_VIEWS.find((v) => v.view === calView)?.label ?? "Month") }}
+          onChange={(e) => setCalView(e.target.value as typeof calView)}
+        >
+          {CAL_VIEWS.map((v) => <option key={v.view} value={v.view}>{v.label}</option>)}
+        </select>
         <select
           className="due-filter-select"
           value={calendarShow}

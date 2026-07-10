@@ -44,6 +44,19 @@ function joinDateTime(date: string, time: string): string | null {
   return new Date(`${date}T${time}`).toISOString();
 }
 
+/** One hour after a local date+time, split back into date/time input values
+ *  -- used to default the due date/time when a start time is set and due
+ *  isn't, same convention as the calendar's time-slot click creation. */
+function addOneHour(date: string, time: string): { date: string; time: string } {
+  const d = new Date(`${date}T${time}`);
+  d.setHours(d.getHours() + 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  };
+}
+
 export default function DetailPanel({ task, lists, subtasks, allCategories = [], onUpdate, onDelete, onAddSubtask, onToggleComplete, onSelectTask }: Props) {
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
@@ -161,7 +174,19 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
           <div className="date-time-pair">
             <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); if (!e.target.value) setStartTime(""); markDirty(); }} />
             <input type="time" value={startTime} disabled={!startDate} title={startDate ? "Optional time" : "Set a date first"}
-              onChange={(e) => { setStartTime(e.target.value); markDirty(); }} />
+              onChange={(e) => {
+                const t = e.target.value;
+                setStartTime(t);
+                markDirty();
+                // Default due to a 1-hour span the first time a start time is
+                // set -- only fills a still-blank due date, never overwrites
+                // one already chosen.
+                if (t && startDate && !dueDate) {
+                  const end = addOneHour(startDate, t);
+                  setDueDate(end.date);
+                  setDueTime(end.time);
+                }
+              }} />
           </div>
         </div>
         <div>

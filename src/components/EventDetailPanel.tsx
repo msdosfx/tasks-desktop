@@ -33,17 +33,26 @@ function joinDateTime(date: string, time: string): string | null {
   return new Date(`${date}T${time}`).toISOString();
 }
 
-/** Formats a stored date for the read-only view used for recurring events. */
-function formatDate(v: string | null, allDay: boolean): string {
-  if (!v) return "";
-  if (allDay || v.length <= 10) {
-    const d = new Date(`${v.slice(0, 10)}T00:00:00`);
-    return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-  }
-  return new Date(v).toLocaleString(undefined, {
-    weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit"
-  });
+/** One hour after a local date+time, split back into date/time input values
+ *  -- used to default the end date/time when a start time is set and end
+ *  isn't, same convention as the calendar's time-slot click creation. */
+function addOneHour(date: string, time: string): { date: string; time: string } {
+  const d = new Date(`${date}T${time}`);
+  d.setHours(d.getHours() + 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  };
 }
+
+const RECUR_PRESETS: { label: string; value: string | null }[] = [
+  { label: "Does not repeat", value: null },
+  { label: "Daily", value: "FREQ=DAILY" },
+  { label: "Weekly", value: "FREQ=WEEKLY" },
+  { label: "Monthly", value: "FREQ=MONTHLY" },
+  { label: "Yearly", value: "FREQ=YEARLY" }
+];
 
 export default function EventDetailPanel({ event, lists, allCategories = [], onUpdate, onDelete }: Props) {
   const [title, setTitle] = useState("");
@@ -55,6 +64,8 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
   const [endTime, setEndTime] = useState("");
   const [notes, setNotes] = useState("");
   const [tags, setTags] = useState("");
+  const [recurMode, setRecurMode] = useState<string>("Does not repeat");
+  const [customRecur, setCustomRecur] = useState("");
   const [reminders, setReminders] = useState<PendingReminder[]>([]);
   const [dirty, setDirty] = useState(false);
 
@@ -68,6 +79,9 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
     setEndDate(ed.date); setEndTime(ed.time);
     setNotes(event?.notes ?? "");
     setTags(event?.tags ?? "");
+    const preset = RECUR_PRESETS.find((p) => p.value === (event?.recurrence ?? null));
+    setRecurMode(preset ? preset.label : event?.recurrence ? "custom" : RECUR_PRESETS[0].label);
+    setCustomRecur(event?.recurrence ?? "");
     setDirty(false);
     if (event?.id) {
       window.api.reminders?.for("event", event.id).then((rs) => {
@@ -85,53 +99,6 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
   const list = lists.find((l) => l.id === event.list_id);
   const isNew = !event.caldav_uid;
 
-  // Recurring events stay read-only in this pass -- editing one occurrence
-  // vs. the whole series needs its own UI (see docs/roadmap.md "Recurring
-  // event editing"). This never applies to newly-created local events since
-  // creating a recurring event isn't supported yet either.
-  if (event.recurrence) {
-    const tagList = event.tags.split(",").map((t) => t.trim()).filter(Boolean);
-    return (
-      <div className="detail-panel event-detail-panel">
-        <h3>{event.title}</h3>
-        <p className="event-readonly-note">
-          This is a recurring event synced from {list?.name || "a CalDAV calendar"}. Editing recurring
-          events isn't supported yet — only single (non-repeating) events can be edited.
-        </p>
-
-        <label>Calendar</label>
-        <div className="event-field">
-          <span className="today-pane-dot" style={{ background: list?.color || "#4a90d9" }} />
-          {list?.name || "Unknown"}
-        </div>
-
-        {event.location && (<><label>Location</label><div className="event-field">{event.location}</div></>)}
-
-        <label>When</label>
-        <div className="event-field">
-          {formatDate(event.start_date, !!event.all_day)}
-          {event.end_date && event.end_date !== event.start_date && (
-            <> – {formatDate(event.end_date, !!event.all_day)}</>
-          )}
-        </div>
-
-        <label>Repeats</label>
-        <div className="event-field">{event.recurrence}</div>
-
-        {tagList.length > 0 && (
-          <>
-            <label>Categories</label>
-            <div className="category-input-wrap">
-              {tagList.map((t) => <span key={t} className="category-tag">{t}</span>)}
-            </div>
-          </>
-        )}
-
-        {event.notes && (<><label>Notes</label><div className="event-field event-notes">{event.notes}</div></>)}
-      </div>
-    );
-  }
-
   function markDirty() {
     setDirty(true);
   }
@@ -145,6 +112,7 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
     const id = event!.id;
     const start = joinDateTime(startDate, startTime);
     if (!start) return; // start date is required
+    const recurrence = recurMode === "custom" ? (customRecur || null) : RECUR_PRESETS.find((p) => p.label === recurMode)?.value ?? null;
     onUpdate(id, {
       title: title.trim() || event!.title,
       list_id: listId,
@@ -152,6 +120,7 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
       all_day: startTime ? 0 : 1,
       start_date: start,
       end_date: joinDateTime(endDate, endTime),
+      recurrence,
       notes,
       tags
     });
@@ -204,7 +173,19 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
           <div className="date-time-pair">
             <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); if (!e.target.value) setStartTime(""); markDirty(); }} />
             <input type="time" value={startTime} disabled={!startDate} title={startDate ? "Optional time — leave blank for an all-day event" : "Set a date first"}
-              onChange={(e) => { setStartTime(e.target.value); markDirty(); }} />
+              onChange={(e) => {
+                const t = e.target.value;
+                setStartTime(t);
+                markDirty();
+                // Default end to a 1-hour span the first time a start time is
+                // set -- only fills a still-blank end date, never overwrites
+                // one already chosen.
+                if (t && startDate && !endDate) {
+                  const end = addOneHour(startDate, t);
+                  setEndDate(end.date);
+                  setEndTime(end.time);
+                }
+              }} />
           </div>
         </div>
         <div>
@@ -216,6 +197,29 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
           </div>
         </div>
       </div>
+
+      <label>Repeats</label>
+      <select
+        value={recurMode}
+        onChange={(e) => { setRecurMode(e.target.value); markDirty(); }}
+      >
+        {RECUR_PRESETS.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
+        <option value="custom">Custom RRULE…</option>
+      </select>
+      {recurMode === "custom" && (
+        <input
+          type="text"
+          placeholder="FREQ=WEEKLY;BYDAY=MO,WE,FR"
+          value={customRecur}
+          onChange={(e) => { setCustomRecur(e.target.value); markDirty(); }}
+        />
+      )}
+      {event.recurrence && (
+        <p className="event-readonly-note">
+          Editing a recurring event rewrites the whole series — there's no way yet to change
+          just one occurrence.
+        </p>
+      )}
 
       <RemindersEditor reminders={reminders} onChange={setRemindersDirty} anchorLabel="starts" />
 

@@ -1,25 +1,33 @@
 # Roadmap / ideas to circle back to
 
 ## Next up
+- **Recurring event editing, part 2 — per-occurrence edits** (RRULE picker + whole-series
+  create/edit/delete shipped 2026-07-09, see "Recurring event editing" under DONE below). Still
+  needed: the single-occurrence-vs-whole-series prompt ("This event" / "This and following" /
+  "All events") that Thunderbird/Outlook/Google Calendar all surface, which needs RECURRENCE-ID
+  exception VEVENTs. Also, the calendar grid still only shows a recurring event's first
+  occurrence — no RRULE expansion yet (`CalendarView.tsx`'s `buildEcEvents` doesn't do occurrence
+  math), so a weekly/daily event doesn't visually repeat across the grid even though the RRULE is
+  stored and synced correctly. **Pick this up first thing next session.**
+- **Drag-to-reschedule doesn't persist** (found 2026-07-09): dragging an event to a new day/time
+  on the calendar doesn't update its stored start/end — it either snaps back or just visually
+  moves without saving. Root cause: `CalendarView.tsx` never sets `editable: true` or wires an
+  `eventDrop`/`eventResize` callback on the `createCalendar` options, so nothing persists the
+  drop back to `onUpdate`/CalDAV. Needs an `eventDrop(info)` handler that computes the new
+  start/end from `info.event.start`/`.end` and calls the same `onUpdate` path the detail panel
+  uses (plus the same treatment for task bars, which have their own drag semantics since they're
+  rendered as all-day date ranges, not real events).
+- **Android VALARM notifications still not firing** (retested 2026-07-09 with the zero-duration
+  event fixed/on the correct calendar — still didn't arrive). Cause still unconfirmed; user is
+  going to set up a second Android device to help isolate whether this is phone-specific (the
+  primary test device already has a history of unreliable notifications from other calendar apps)
+  versus something about Tasks Desktop's sync/VALARM output. **Test with the second phone first
+  thing next session.**
 - **Collapsible/resizable right rail** (added 2026-07-09, user said this can wait if it's a big
   lift): let the Today pane + task/event detail column collapse or resize so the calendar grid
   can use the freed width. `.app`'s grid-template-columns is currently fixed (`220px 1fr 320px`
   in styles.css) — would need a collapsed-width state, a toggle button, and the grid template to
   react to it.
-- **Event editing** (added 2026-07-09, IN PROGRESS as of 2026-07-09 later session): calendar events
-  were a read-only mirror (`EventDetailPanel.tsx` explicitly said so). Now building create/edit/delete
-  for non-recurring events: `eventToVEvent` in `electron/ical.ts` (mirroring `taskToVTodo`), a push
-  phase in `caldav.ts` mirroring the task etag/dirty/conflict logic, `dirty` column + CRUD in `db.ts`,
-  IPC in main.ts/preload.cts, and an editable form in `EventDetailPanel.tsx`. Recurring events (has an
-  RRULE) stay read-only in this pass — see "Recurring event editing" below for the follow-up.
-- **Recurring event editing** (added 2026-07-09, per explicit user request — "we are going to want to
-  add recurring events, put it on the game plan"): once non-recurring event CRUD ships, extend it to
-  events with an RRULE. Needs the same single-occurrence-vs-whole-series decision Thunderbird/Outlook/
-  Google Calendar all surface as a prompt ("This event" / "This and following" / "All events") —
-  requires either RECURRENCE-ID exception VEVENTs (edit one occurrence) or rewriting the RRULE (edit
-  the series). Also needs UI for *creating* a new recurring event (recurrence-rule picker), which
-  doesn't exist anywhere in the app yet even for tasks' RRULE support. Bigger lift than plain CRUD —
-  do this only after non-recurring editing has been tested and feels solid.
 - **Per-category colors** (added 2026-07-09): Thunderbird supports assigning a color to each
   category, independent of the calendar/list it's on. Tasks.org doesn't have this. Calendar view
   currently colors tasks/events by their list only (categories have no color anywhere in the app —
@@ -27,12 +35,43 @@
   (name, color) + small settings UI, then calendar/task-table coloring could prefer category color
   over list color when a task has one. Deferred for now — calendar view v1 uses list color only.
 
-- **Calendar view** — circle back to this after the recurrence + hide-until work ships.
-  Before designing it, look at **Rainlendar**: a lot of Tasks.org users run it as their
-  desktop calendar. Worth checking (a) what its task/event UI gets right, and (b) whether
-  we can interoperate directly — Rainlendar can read iCalendar files and (in the Pro
-  version) speak CalDAV, so it may be able to point at the same CalDAV calendars this app
-  syncs with, giving users a desktop calendar overlay for free without us building one.
+## Event editing — DONE (2026-07-09)
+- Calendar events were a read-only mirror (`EventDetailPanel.tsx` explicitly said so). Shipped
+  create/edit/delete for non-recurring events: `eventToVEvent` in `electron/ical.ts` (mirroring
+  `taskToVTodo`), a push phase in `caldav.ts` mirroring the task etag/dirty/conflict logic,
+  `dirty` column + CRUD in `db.ts`, IPC in main.ts/preload.cts, and an editable form in
+  `EventDetailPanel.tsx`.
+
+## Recurring event editing, part 1 — whole-series CRUD — DONE (2026-07-09)
+- Per explicit user request ("we are going to want to add recurring events, put it on the game
+  plan"): events with an RRULE can now be created and edited, not just read-only. Added the same
+  `RECUR_PRESETS` dropdown (Daily/Weekly/Monthly/Yearly/custom RRULE) tasks already had to
+  `EventDetailPanel.tsx`, removed its read-only branch for recurring events, and dropped the
+  `if (local.recurrence) continue` skip in `caldav.ts`'s event push loop. Scoped deliberately as
+  **whole-series only** — every edit rewrites the single master VEVENT's RRULE, no RECURRENCE-ID
+  exceptions — to avoid the bigger occurrence-vs-series lift for this first pass. See "part 2"
+  above for the follow-up (per-occurrence edits + grid expansion).
+
+## Calendar view — week/day views, time-slot creation, view toggle — DONE (2026-07-09)
+- Month/Week/Day toggle in the calendar toolbar (styled as a `due-filter-select` like the other
+  toolbar filters), replacing the library's default dead-feeling "today" header button. Week/Day
+  use `@event-calendar/core`'s `TimeGrid` plugin (`timeGridWeek`/`timeGridDay`) for an hourly grid
+  with a scrollbar and a current-time indicator line, not `DayGrid`'s `dayGridWeek` (which is just
+  a strip of day cells with no hours).
+- `slotEventOverlap: false` so same-time events lay out side by side in their own columns instead
+  of stacking with a slight offset — the stacked ones underneath were hard to click. User flagged
+  this still doesn't feel fully right after the change (2026-07-09) — revisit if it comes up again,
+  wasn't pinned down further this session.
+- Double-click or right-click on a time slot in week/day view now fills in the actual clicked time
+  (via `dateFromPoint`'s `allDay: false` case) instead of only ever creating an all-day item;
+  month view still only carries the date. New events/tasks created with a start time — from a
+  calendar click or typed manually in the detail panel — default their end/due to a 1-hour span if
+  it's still blank, editable after (`addOneHour` helper in both `EventDetailPanel.tsx` and
+  `DetailPanel.tsx`).
+
+- **Interop note, still relevant**: before doing more calendar-view work, look at **Rainlendar** —
+  a lot of Tasks.org users run it as their desktop calendar, and (Pro version) it speaks CalDAV
+  directly against the same calendars this app syncs with, which might cover some of this for free.
 
 ## Reminders / notifications — DONE (v0.1.12)
 - Shipped: minute-tick scheduler in the main process, native notifications (click
@@ -92,17 +131,23 @@
   silently dropped when a conflict copy is created.
 - **Verified working end to end (2026-07-09)**: push tested Tasks Desktop → Thunderbird (VALARM
   arrived, notification fired in both apps) and pull tested Thunderbird → Tasks Desktop (same).
-- **Android result is mixed, cause unconfirmed**: a reminder pushed from Thunderbird fired
-  correctly on the user's Android device, but a reminder pushed from Tasks Desktop to the same
-  calendar did not. Both should be producing an equivalent VALARM block, so this asymmetry is
-  worth a closer look eventually — possible causes include a real formatting difference between
-  Thunderbird's VALARM output and ours that Android's calendar app is pickier about, or it may
-  be unrelated to sync entirely: the user is running a "unique" Android calendar build and has
-  already seen unreliable notifications from other calendar apps on that device (suspected
-  phone-side issue, not proven). Not investigated further yet — if it recurs after ruling out
-  the phone-side angle, compare the raw .ics VALARM block Tasks Desktop pushes against the one
-  Thunderbird pushes (same task/event, both synced to the same calendar) for any structural
-  difference.
+- **Android result is mixed, cause still unconfirmed after two rounds of testing**: a reminder
+  pushed from Thunderbird fired correctly on the user's Android device, but one pushed from Tasks
+  Desktop to the same calendar did not.
+  - Round 1 (2026-07-09): compared the raw VALARM-DEBUG dumps in `sync.log` for a Tasks-Desktop-
+    pushed test event vs. Thunderbird's — found the Tasks Desktop test event had `DTSTART` equal
+    to `DTEND` (zero duration) and a `TRIGGER:PT0S` (fires at start, no lead time) default from
+    `ensureDefaultReminder`, vs. Thunderbird's non-zero-duration events with `-PT5M`+ lead. Theory:
+    a 0-minute-lead reminder can already be in the past by the time DAVx5's sync interval delivers
+    it to the phone, and Android silently drops past-due alarms rather than firing them late.
+  - Round 2 (2026-07-09, same session): retested with a fresh event given a 10-15 minute reminder
+    lead — but it turned out to be created on the wrong calendar the first attempt, so that retest
+    doesn't count. After fixing the calendar and retesting again, the reminder still didn't arrive
+    on Android.
+  - Not proven either way yet whether this is a Tasks Desktop/sync issue or a phone-side issue —
+    the primary test device is a "unique" Android build that has already shown unreliable
+    notifications from other calendar apps. **Next session: test with a second Android device**
+    (user is setting one up) to isolate phone-specific flakiness from an actual app bug.
 
 ## Calendar month-view time badge showing wrong hour — FIXED (2026-07-09, same session)
 - While testing VALARM above, found a real event/reminder time (e.g. 4:41 PM) displaying as
