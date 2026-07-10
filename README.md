@@ -36,28 +36,32 @@ sudo apt install ./tasks-desktop_x.y.z_amd64.deb
 `sudo apt -f install` if it complains). Launch from your app menu, or run `tasks-desktop`.
 Update by installing a newer .deb the same way; remove with `sudo apt remove tasks-desktop`.
 
-### Flatpak (.flatpak)
+### Flatpak (auto-updating)
 
-A `.flatpak` bundle can't be launched directly — it must be installed with flatpak, and it needs the
-shared runtimes it was built against (one-time setup):
+Tasks Desktop is published as a proper Flatpak repository, so you install it once and then
+`flatpak update` (or GNOME Software / KDE Discover) keeps it current automatically:
 
 ```bash
-# one-time: add Flathub and install the runtimes
-flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install flathub org.freedesktop.Platform//24.08 org.electronjs.Electron2.BaseApp//24.08
+# install once from the repository (pulls the runtimes it needs from Flathub)
+flatpak install --from https://precisioncrab.github.io/tasks-desktop/tasks-desktop.flatpakref
 
-# install and run the bundle
-flatpak install "./Tasks Desktop-x.y.z-x86_64.flatpak"
+# run it
 flatpak run com.arlis.tasksdesktop
 ```
 
-After that it appears in your app menu like any other app. Update by installing a newer bundle over it;
-remove with `flatpak uninstall com.arlis.tasksdesktop`.
+After that it appears in your app menu like any other app. To update:
 
-The bundle has no update channel, so `flatpak update` won't find new versions. The
-`scripts/update-tasksdesktop.sh` script downloads the latest release bundle and reinstalls it in one
-step — requires the [`gh` CLI](https://cli.github.com/), logged in. Copy it to `~/.local/bin` and run
-`update-tasksdesktop` whenever you want the newest version.
+```bash
+flatpak update
+```
+
+Remove it with `flatpak uninstall com.arlis.tasksdesktop`. (If you have a Flathub remote already, the
+required runtimes install automatically; if not, the `.flatpakref` points at Flathub so they're fetched
+on first install.)
+
+A standalone `.flatpak` bundle is also attached to each [GitHub release](https://github.com/precisioncrab/tasks-desktop/releases/latest)
+for offline installs, but the repository above is the recommended path since it's the one that
+auto-updates.
 
 ### macOS (.dmg)
 

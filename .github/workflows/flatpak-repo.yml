@@ -1,0 +1,167 @@
+name: Flatpak Repo (Pages)
+
+# Builds the Flatpak with electron-builder (same output as the release job),
+# imports the resulting single-file bundle into a signed OSTree "archive" repo,
+# and publishes that repo to GitHub Pages. Because it's a real repository (not a
+# lone bundle), `flatpak update` works — users install once from the published
+# .flatpakref and get automatic updates on every future tagged release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# Pages deploy needs these; the build job only reads the repo.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two Pages publishes clobber each other.
+concurrency:
+  group: flatpak-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install flatpak, ostree, and the runtimes electron-builder needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder ostree
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y flathub \
+            org.freedesktop.Platform//24.08 \
+            org.freedesktop.Sdk//24.08 \
+            org.electronjs.Electron2.BaseApp//24.08
+
+      - name: Import GPG signing key
+        id: gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Install dependencies and build
+        run: |
+          npm install
+          npm run build
+
+      - name: Package Flatpak bundle
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npx electron-builder --linux flatpak --publish never
+
+      - name: Import bundle into a signed OSTree repo
+        id: repo
+        run: |
+          set -euo pipefail
+          FPR="${{ steps.gpg.outputs.fingerprint }}"
+          BUNDLE="$(ls release/*.flatpak | head -n1)"
+          echo "Importing bundle: $BUNDLE"
+
+          mkdir -p pages
+          # archive mode is required for a repo served over plain static HTTP
+          ostree --repo=pages/repo init --mode=archive-z2
+          flatpak build-import-bundle --gpg-sign="$FPR" pages/repo "$BUNDLE"
+          flatpak build-update-repo \
+            --gpg-sign="$FPR" \
+            --generate-static-deltas \
+            --prune --prune-depth=20 \
+            pages/repo
+
+          # Read back the ref that was actually imported so the .flatpakref
+          # metadata matches (branch name comes from electron-builder).
+          REF="$(ostree --repo=pages/repo refs | grep '^app/' | head -n1)"
+          echo "Imported ref: $REF"
+          {
+            echo "appid=$(echo "$REF" | cut -d/ -f2)"
+            echo "arch=$(echo "$REF" | cut -d/ -f3)"
+            echo "branch=$(echo "$REF" | cut -d/ -f4)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate .flatpakref / .flatpakrepo + landing page
+        run: |
+          set -euo pipefail
+          PAGES_URL="https://precisioncrab.github.io/tasks-desktop"
+          REPO_URL="$PAGES_URL/repo"
+          APPID="${{ steps.repo.outputs.appid }}"
+          BRANCH="${{ steps.repo.outputs.branch }}"
+          # single-line base64 of the public key, as required in *.flatpakref
+          GPGKEY="$(gpg --export "${{ steps.gpg.outputs.fingerprint }}" | base64 -w0)"
+
+          # Stops GitHub Pages' Jekyll from mangling the ostree repo directories
+          touch pages/.nojekyll
+
+          cat > pages/tasks-desktop.flatpakref <<EOF
+          [Flatpak Ref]
+          Name=$APPID
+          Branch=$BRANCH
+          Title=Tasks Desktop
+          Url=$REPO_URL
+          Homepage=https://github.com/precisioncrab/tasks-desktop
+          IsRuntime=false
+          RuntimeRepo=https://flathub.org/repo/flathub.flatpakrepo
+          GPGKey=$GPGKEY
+          EOF
+
+          cat > pages/tasks-desktop.flatpakrepo <<EOF
+          [Flatpak Repo]
+          Title=Tasks Desktop (precisioncrab)
+          Url=$REPO_URL
+          Homepage=https://github.com/precisioncrab/tasks-desktop
+          Comment=Auto-updating Flatpak repository for Tasks Desktop
+          GPGKey=$GPGKEY
+          EOF
+
+          cat > pages/index.html <<EOF
+          <!doctype html>
+          <html lang="en"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Tasks Desktop — Flatpak</title>
+          <style>
+            body{font-family:system-ui,sans-serif;max-width:44rem;margin:3rem auto;padding:0 1rem;line-height:1.5}
+            code,pre{background:#f4f4f5;border-radius:6px}
+            code{padding:.1em .35em}
+            pre{padding:1rem;overflow-x:auto}
+            h1{margin-bottom:.2rem}
+          </style></head><body>
+          <h1>Tasks Desktop — Flatpak</h1>
+          <p>An auto-updating Flatpak repository. Install once, then <code>flatpak update</code>
+          keeps it current.</p>
+          <h2>Install</h2>
+          <pre>flatpak install --from $PAGES_URL/tasks-desktop.flatpakref</pre>
+          <p>Then run it from your app menu or with:</p>
+          <pre>flatpak run $APPID</pre>
+          <h2>Update</h2>
+          <pre>flatpak update</pre>
+          <p><a href="https://github.com/precisioncrab/tasks-desktop">Project on GitHub</a></p>
+          </body></html>
+          EOF
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
