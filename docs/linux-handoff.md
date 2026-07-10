@@ -40,7 +40,7 @@ releases; bundle installs have no update channel, so `flatpak update` never find
 Current update path is the manual script at repo-sibling `update-tasksdesktop.sh`:
 
 ```
-gh release download --repo msdosfx/tasks-desktop --pattern '*.flatpak' --dir "$TMP"
+gh release download --repo precisioncrab/tasks-desktop --pattern '*.flatpak' --dir "$TMP"
 flatpak install --reinstall -y "$TMP"/*.flatpak
 ```
 

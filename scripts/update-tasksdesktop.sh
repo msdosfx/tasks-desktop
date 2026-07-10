@@ -5,7 +5,7 @@ set -euo pipefail
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-gh release download --repo msdosfx/tasks-desktop --pattern '*.flatpak' --dir "$TMP"
+gh release download --repo precisioncrab/tasks-desktop --pattern '*.flatpak' --dir "$TMP"
 sudo flatpak install --reinstall -y "$TMP"/*.flatpak
 
 echo "Done. Installed version:"

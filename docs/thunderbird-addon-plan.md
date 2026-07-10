@@ -48,7 +48,7 @@ I have an existing Electron desktop app called "Tasks Desktop" that I want to
 turn into a Thunderbird add-on. It's React + TypeScript, uses node:sqlite for
 storage, tsdav for CalDAV sync, and ical.js for VTODO parsing. Source lives at
 C:\Users\Hunter\Documents\Claude\Projects\Tasks.org Desktop\tasks-desktop
-(GitHub: msdosfx/tasks-desktop).
+(GitHub: precisioncrab/tasks-desktop).
 
 Please read the source (src/, electron/, package.json) to get familiar with
 the app, then let's work out an outline together for the path of least

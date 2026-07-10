@@ -8,12 +8,12 @@ Tasks.org mobile setup (DAVx5 / Nextcloud / any Tasks.org-compatible CalDAV serv
 > **Beta software.** This project is still in active development and hasn't reached a stable 1.0 yet.
 > Expect rough edges and bugs, and keep a backup of anything important — while sync is two-way, you
 > shouldn't rely on this as the only copy of your tasks until a v1.0 release. Bug reports are welcome
-> on the [issue tracker](https://github.com/msdosfx/tasks-desktop/issues).
+> on the [issue tracker](https://github.com/precisioncrab/tasks-desktop/issues).
 
 ## Installation
 
 Grab the latest build for your platform from the
-[Releases page](https://github.com/msdosfx/tasks-desktop/releases/latest).
+[Releases page](https://github.com/precisioncrab/tasks-desktop/releases/latest).
 
 ### Windows (.exe)
 

@@ -52,7 +52,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "msdosfx",
+      "owner": "precisioncrab",
       "repo": "tasks-desktop"
     },
     "mac": {
