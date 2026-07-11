@@ -27,6 +27,12 @@ function isToday(dateStr: string | null, today: string): boolean {
   return dateStr.slice(0, 10) === today;
 }
 
+/** Due today or any day before it (overdue). */
+function isDueByToday(dateStr: string | null, today: string): boolean {
+  if (!dateStr) return false;
+  return dateStr.slice(0, 10) <= today;
+}
+
 /** True for single-day events today, and for multi-day events currently
  *  spanning today (e.g. a vacation Mon–Fri shows all week, not just on Mon). */
 function eventIsToday(e: CalendarEvent, today: string): boolean {
@@ -69,16 +75,22 @@ export default function TodayPane({ tasks, events, lists, onSelectTask, onSelect
   if (show !== "events") {
     for (const t of tasks) {
       if (t.completed || t.deleted) continue;
-      if (!isToday(t.due_date, today) && !isToday(t.start_date, today)) continue;
+      if (!isDueByToday(t.due_date, today) && !isToday(t.start_date, today)) continue;
       const due = isToday(t.due_date, today);
+      const overdue = !due && isDueByToday(t.due_date, today);
       const starts = isToday(t.start_date, today);
+      const label = overdue
+        ? (starts ? "starts & overdue" : "overdue")
+        : due
+          ? (starts ? "starts & due" : "due")
+          : "starts";
       rows.push({
         kind: "task",
         id: t.id,
         sortKey: t.due_date || t.start_date || "",
         listId: t.list_id,
         title: t.title,
-        label: due && starts ? "starts & due" : due ? "due" : "starts"
+        label
       });
     }
   }

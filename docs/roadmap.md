@@ -6,12 +6,6 @@
   possible if wanted later: the single-occurrence-vs-whole-series prompt ("This event" / "This and
   following" / "All events") that Thunderbird/Outlook/Google Calendar all surface, which needs
   RECURRENCE-ID exception VEVENTs.
-- **RRULE grid expansion — decided against (2026-07-10).** The calendar grid only ever shows a
-  recurring event's first occurrence (`CalendarView.tsx`'s `buildEcEvents` does no occurrence
-  math), so a weekly/daily event doesn't visually repeat across the grid even though the RRULE is
-  stored and synced correctly. User decided this isn't wanted — not worth the occurrence-expansion
-  complexity. Leaving whole-series create/edit/delete as the recurring-event story; the RRULE
-  still round-trips to CalDAV, it just isn't drawn on every future date. Parked, not planned.
 - **Collapsible/resizable right rail** (added 2026-07-09, user said this can wait if it's a big
   lift): let the Today pane + task/event detail column collapse or resize so the calendar grid
   can use the freed width. `.app`'s grid-template-columns is currently fixed (`220px 1fr 320px`
@@ -23,6 +17,34 @@
   they're free-text comma-separated tags with no color storage). Worth adding: a `categories` table
   (name, color) + small settings UI, then calendar/task-table coloring could prefer category color
   over list color when a task has one. Deferred for now — calendar view v1 uses list color only.
+
+## RRULE grid expansion — DONE (2026-07-11)
+- **Reversed the 2026-07-10 "decided against" call** at the user's request: not being able to see a
+  recurring item anywhere but its original date was a real problem (a weekly task set up months ago
+  showed only on its base date, invisible in the current month). Went with the **Thunderbird model**
+  (expand the series across the visible grid) over the Tasks.org model (one rolling instance that
+  advances on completion), since a calendar's whole job is spreading occurrences out.
+- `CalendarView.tsx` now expands each recurring event/task across the currently-visible range:
+  a new `occurrenceDeltas()` helper runs the stored RRULE through `rrule.js` (already a dep, same
+  lib as `db.ts`) and returns occurrence offsets as **ms deltas from the anchor**, so each drawn
+  bar reuses the existing `shiftStored()` format/timezone-safe path instead of re-deriving dates.
+  Tasks anchor on the due date (matching `db.ts`'s completion roll-forward) and honor all three
+  display modes; events anchor on start and carry their duration.
+- Visible range is tracked via the calendar's `datesSet` callback (stashed in a ref + a
+  `rangeVersion` bump that re-triggers the event rebuild), so occurrences appear wherever the user
+  navigates, not just the mount month. Expansion window is padded ±2 days so an occurrence at the
+  grid edge isn't clipped by rrule/window timezone rounding.
+- Occurrences are **read-only "ghosts"**: `editable: false` (the existing drag guards still revert
+  as a backstop), dimmed with a dashed outline + faint diagonal hatch + a ↻ marker (`.ec-recurring`
+  / `.ec-recur-mark` in styles.css). Clicking one opens the **master** item's detail panel — the
+  occurrence id gets an `::<n>` suffix for uniqueness, and `eventClick` resolves the real id from a
+  `masterId` stashed in `extendedProps`. The base (non-recurring) bars keep their plain
+  `task-`/`event-` ids so the editable drag path is untouched.
+- Verified with `tsc --noEmit` (clean). Full `vite` build still can't run in the Linux sandbox
+  (rollup's native binary is Windows-only) — run `npm run build` on Windows to confirm the bundle.
+- Follow-up still open: per-occurrence *editing* (drag/delete a single instance) needs
+  RECURRENCE-ID/EXDATE exceptions — see "Recurring event editing, part 2" under Next up. This
+  change is display-only; the master RRULE and CalDAV round-trip are unchanged.
 
 ## Drag-to-reschedule — DONE (2026-07-10)
 - Dragging a bar on the calendar now persists. `CalendarView.tsx` sets `editable: true`
@@ -41,9 +63,10 @@
   for tasks only in "range" mode (left edge → `start_date`, right edge → `due_date`); single-day
   "due"/"start" bars set `durationEditable: false` since there's no second field to grow into.
 - **Recurring events/tasks are locked** for drag/resize (`editable: false` per-item, plus a guard
-  in both handlers that calls `info.revert()`): they only render their first occurrence and are
-  whole-series only today, so a drag would silently shift the entire series. Revisit alongside
-  recurring part 2 (per-occurrence edits + RRULE grid expansion) below.
+  in both handlers that calls `info.revert()`) because they're whole-series only, so a drag would
+  silently shift the entire series. (As of 2026-07-11 they now render every occurrence across the
+  visible grid, not just the first — see "RRULE grid expansion" above — but stay drag-locked until
+  per-occurrence editing lands in recurring part 2.)
 - Not yet compiler-verified in this session — the sandbox couldn't run `tsc`/`vite` (Windows-
   installed node_modules lack Linux binaries, and the shell mount was returning truncated file
   reads). Verified by inspection; run `npm run build` on Windows to confirm.

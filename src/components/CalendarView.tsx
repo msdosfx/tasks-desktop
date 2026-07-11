@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createCalendar, destroyCalendar, DayGrid, TimeGrid, Interaction } from "@event-calendar/core";
 import "@event-calendar/core/index.css";
+import { RRule } from "rrule";
 import { CalendarEvent, Task, TaskList } from "../types";
 import { selectWidth } from "../selectWidth";
 import ContextMenu from "./ContextMenu";
@@ -90,12 +91,39 @@ function shiftStored(v: string, deltaMs: number): string {
   return new Date(new Date(v).getTime() + deltaMs).toISOString();
 }
 
+/** Occurrence offsets (ms from the item's anchor date) for a recurring item's
+ *  RRULE that land within [windowStart, windowEnd]. Returned as deltas -- not
+ *  absolute dates -- so the caller can shift the item's *stored* start/due via
+ *  shiftStored and reuse every existing format/timezone path: the interval
+ *  between occurrences is what rrule.js gives us reliably, sidestepping its
+ *  known absolute-UTC quirks. dtstart handling mirrors db.ts's nextOccurrence
+ *  (date-only anchored at UTC midnight). Capped so a pathological rule can't
+ *  emit unbounded bars. Returns [] on a malformed rule. */
+function occurrenceDeltas(rruleStr: string, anchor: string, windowStart: Date, windowEnd: Date): number[] {
+  try {
+    const dateOnly = anchor.length <= 10;
+    const dtstart = new Date(dateOnly ? `${anchor}T00:00:00Z` : anchor);
+    const rule = new RRule({ ...RRule.parseString(rruleStr), dtstart });
+    const occs = rule.between(windowStart, windowEnd, true).slice(0, 400);
+    return occs.map((o) => o.getTime() - dtstart.getTime());
+  } catch {
+    return [];
+  }
+}
+
 export default function CalendarView({
   events, tasks, lists, calendarShow, onSetCalendarShow, selectedTaskId, selectedEventId, onSelectTask, onSelectEvent, onCreateEvent, onCreateTask, listFilter, onSetListFilter, onUpdateEvent, onUpdateTask
 }: Props) {
   const elRef = useRef<HTMLDivElement>(null);
   const ecRef = useRef<ReturnType<typeof createCalendar> | null>(null);
   const [ready, setReady] = useState(false);
+  // The calendar's currently-visible date span (activeRange, incl. the
+  // leading/trailing days a month view shows). Set by the datesSet handler on
+  // mount and on every navigate/view change; recurring items are expanded only
+  // across this window (Thunderbird-style), so `rangeVersion` bumps force a
+  // rebuild whenever it moves.
+  const visibleRangeRef = useRef<{ start: Date; end: Date } | null>(null);
+  const [rangeVersion, setRangeVersion] = useState(0);
   const [dayMenu, setDayMenu] = useState<{ x: number; y: number; dateStr: string } | null>(null);
   // Refs so the mount-once eventClick handler and the DOM dblclick/contextmenu
   // listeners always call the latest callback, even though they're wired up
@@ -158,26 +186,53 @@ export default function CalendarView({
   const matchesCategory = (tags: string) =>
     categoryFilter === "all" || splitTags(tags).includes(categoryFilter);
 
+  // Occurrence offsets (ms) to draw a recurring item at. Non-recurring items
+  // (and, defensively, recurring ones before the first datesSet has told us the
+  // visible window) get a single [0] -- their stored date, unchanged. Recurring
+  // items with a known window get one delta per occurrence inside it (padded 2
+  // days each side so an occurrence right at the grid edge isn't clipped by
+  // rrule/window timezone rounding); an empty result means the series simply
+  // doesn't touch this view, so nothing is drawn -- the whole point of the
+  // Thunderbird-style expansion replacing the old always-draw-the-base behavior.
+  function deltasFor(recurrence: string | null, anchor: string): number[] {
+    if (!recurrence) return [0];
+    const range = visibleRangeRef.current;
+    if (!range) return [0];
+    const pad = 2 * 86400000;
+    return occurrenceDeltas(recurrence, anchor, new Date(range.start.getTime() - pad), new Date(range.end.getTime() + pad));
+  }
+
   function buildEcEvents() {
     const out: any[] = [];
     if (showEvents) {
       for (const e of events) {
         if (listFilter !== "all" && e.list_id !== listFilter) continue;
         if (!matchesCategory(e.tags)) continue;
-        out.push({
-          id: `event-${e.id}`,
-          title: e.title,
-          start: toLocalFloating(e.start_date),
-          end: toLocalFloating(e.end_date || e.start_date),
-          allDay: !!e.all_day,
-          backgroundColor: colorFor(e.list_id),
-          classNames: e.id === selectedEventId ? ["ec-selected"] : [],
-          // Recurring events are whole-series only and show just their first
-          // occurrence today, so dragging one would silently shift the whole
-          // series to a misleading spot -- lock them until per-occurrence
-          // editing + RRULE grid expansion land (see roadmap).
-          editable: !e.recurrence,
-          extendedProps: { kind: "event", location: e.location }
+        const recurring = !!e.recurrence;
+        const deltas = deltasFor(e.recurrence, e.start_date);
+        deltas.forEach((d, i) => {
+          out.push({
+            // Occurrences beyond the first need distinct ids (the library
+            // rejects duplicates); the master id is carried in extendedProps so
+            // clicks still resolve to the real event. The base occurrence keeps
+            // the plain `event-<id>` so the (editable, non-recurring) drag path
+            // that slices the id off is unaffected.
+            id: recurring ? `event-${e.id}::${i}` : `event-${e.id}`,
+            title: e.title,
+            start: toLocalFloating(shiftStored(e.start_date, d)),
+            end: toLocalFloating(shiftStored(e.end_date || e.start_date, d)),
+            allDay: !!e.all_day,
+            backgroundColor: colorFor(e.list_id),
+            classNames: [
+              ...(e.id === selectedEventId ? ["ec-selected"] : []),
+              ...(recurring ? ["ec-recurring"] : [])
+            ],
+            // Recurring occurrences are read-only ghosts: they're whole-series
+            // only, so a drag would silently shift the entire series. Locking
+            // them (and reverting in the drag guards) keeps that safe.
+            editable: !recurring,
+            extendedProps: { kind: "event", location: e.location, masterId: e.id, recurring }
+          });
         });
       }
     }
@@ -186,45 +241,66 @@ export default function CalendarView({
         if (t.completed || t.deleted) continue;
         if (listFilter !== "all" && t.list_id !== listFilter) continue;
         if (!matchesCategory(t.tags)) continue;
+        const recurring = !!t.recurrence;
+        // Recurrence is anchored on the due date (Tasks.org convention, matching
+        // db.ts's completion roll-forward); the same interval is applied to
+        // whichever field(s) the current display mode actually draws.
+        const anchor = t.due_date || t.start_date;
         if (displayMode === "start") {
           const startOnly = t.start_date || t.due_date;
           if (!startOnly) continue;
-          out.push({
-            id: `task-${t.id}`,
-            title: t.title,
-            start: startOnly,
-            end: nextDay(startOnly),
-            allDay: true,
-            backgroundColor: colorFor(t.list_id),
-            classNames: t.id === selectedTaskId ? ["task-bar", "ec-selected"] : ["task-bar"],
-            // Draggable to reschedule; not resizable in start/due mode -- a
-            // single-day bar has no second date field to grow into (only the
-            // start-due "range" mode does). Recurring tasks stay locked.
-            editable: !t.recurrence,
-            startEditable: !t.recurrence,
-            durationEditable: false,
-            extendedProps: { kind: "task" }
+          const deltas = deltasFor(t.recurrence, anchor || startOnly);
+          deltas.forEach((d, i) => {
+            const s = shiftStored(startOnly, d);
+            out.push({
+              id: recurring ? `task-${t.id}::${i}` : `task-${t.id}`,
+              title: t.title,
+              start: s,
+              end: nextDay(s),
+              allDay: true,
+              backgroundColor: colorFor(t.list_id),
+              classNames: [
+                "task-bar",
+                ...(t.id === selectedTaskId ? ["ec-selected"] : []),
+                ...(recurring ? ["ec-recurring"] : [])
+              ],
+              // Draggable to reschedule; not resizable in start/due mode -- a
+              // single-day bar has no second date field to grow into (only the
+              // start-due "range" mode does). Recurring occurrences stay locked.
+              editable: !recurring,
+              startEditable: !recurring,
+              durationEditable: false,
+              extendedProps: { kind: "task", masterId: t.id, recurring }
+            });
           });
           continue;
         }
         const due = t.due_date || t.start_date;
         if (!due) continue;
         const start = displayMode === "range" ? t.start_date || due : due;
-        out.push({
-          id: `task-${t.id}`,
-          title: t.title,
-          start,
-          end: nextDay(due),
-          allDay: true,
-          backgroundColor: colorFor(t.list_id),
-          classNames: t.id === selectedTaskId ? ["task-bar", "ec-selected"] : ["task-bar"],
-          // Draggable to reschedule. Resizable only in "range" mode, where the
-          // bar spans start_date..due_date and each edge maps to a real field;
-          // "due" mode is a single-day bar with nothing to resize into.
-          editable: !t.recurrence,
-          startEditable: !t.recurrence,
-          durationEditable: displayMode === "range",
-          extendedProps: { kind: "task" }
+        const deltas = deltasFor(t.recurrence, anchor || due);
+        deltas.forEach((d, i) => {
+          const shiftedDue = shiftStored(due, d);
+          out.push({
+            id: recurring ? `task-${t.id}::${i}` : `task-${t.id}`,
+            title: t.title,
+            start: shiftStored(start, d),
+            end: nextDay(shiftedDue),
+            allDay: true,
+            backgroundColor: colorFor(t.list_id),
+            classNames: [
+              "task-bar",
+              ...(t.id === selectedTaskId ? ["ec-selected"] : []),
+              ...(recurring ? ["ec-recurring"] : [])
+            ],
+            // Draggable to reschedule. Resizable only in "range" mode, where the
+            // bar spans start_date..due_date and each edge maps to a real field;
+            // "due" mode is a single-day bar with nothing to resize into.
+            editable: !recurring,
+            startEditable: !recurring,
+            durationEditable: !recurring && displayMode === "range",
+            extendedProps: { kind: "task", masterId: t.id, recurring }
+          });
         });
       }
     }
@@ -254,6 +330,16 @@ export default function CalendarView({
       // week/day view. `false` lays intersecting events side by side in
       // their own columns instead -- each stays independently clickable.
       slotEventOverlap: false,
+      // Fires on mount and on every navigate/view change with the visible span
+      // (activeRange). Stash it and bump rangeVersion so the reactive effect
+      // re-expands recurring items for the new window. Guard against a no-op
+      // re-fire (same bounds) so we don't loop.
+      datesSet(info: any) {
+        const cur = visibleRangeRef.current;
+        if (cur && cur.start.getTime() === info.start.getTime() && cur.end.getTime() === info.end.getTime()) return;
+        visibleRangeRef.current = { start: info.start, end: info.end };
+        setRangeVersion((v) => v + 1);
+      },
       events: buildEcEvents(),
       // A day with a lot of tasks/events stretches its whole week row taller
       // (library behavior, unchanged) -- `dayMaxEvents` turned out
@@ -273,15 +359,25 @@ export default function CalendarView({
       //-converted local `Date` (the library's own `toLocalDate()` helper),
       // so a plain `toLocaleTimeString` on it is trustworthy.
       eventContent(arg: any) {
-        if (arg.event.allDay) return undefined; // default (title-only) rendering is fine
-        const timeText = (arg.event.start as Date).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
         const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        return { html: `<time class="ec-event-time">${escape(timeText)}</time><h4 class="ec-event-title">${escape(arg.event.title)}</h4>` };
+        // A small ↻ badge marks generated recurrence occurrences so they read
+        // as "part of a series" rather than individually-stored items.
+        const mark = arg.event.extendedProps?.recurring ? '<span class="ec-recur-mark" aria-label="repeats">↻</span>' : "";
+        if (arg.event.allDay) {
+          if (!mark) return undefined; // default (title-only) rendering is fine
+          return { html: `${mark}<span class="ec-event-title">${escape(arg.event.title)}</span>` };
+        }
+        const timeText = (arg.event.start as Date).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+        return { html: `${mark}<time class="ec-event-time">${escape(timeText)}</time><h4 class="ec-event-title">${escape(arg.event.title)}</h4>` };
       },
       eventClick(info: any) {
+        // A recurring occurrence's id has an `::<n>` suffix, so prefer the
+        // master id stashed in extendedProps; fall back to slicing the prefix
+        // off the plain `task-`/`event-` id for anything without it.
+        const props = info?.event?.extendedProps ?? {};
         const id = String(info?.event?.id ?? "");
-        if (id.startsWith("task-")) onSelectTaskRef.current(id.slice(5));
-        else if (id.startsWith("event-")) onSelectEventRef.current(id.slice(6));
+        if (props.kind === "task") onSelectTaskRef.current(props.masterId ?? id.slice(5));
+        else if (props.kind === "event") onSelectEventRef.current(props.masterId ?? id.slice(6));
       },
       // Drag a bar to a new day/time. `info.event`/`info.oldEvent` carry the
       // library's already-local Date start/end; the millisecond diff between
