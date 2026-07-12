@@ -22,12 +22,11 @@ import {
   eventCreate,
   eventUpdate,
   eventDelete,
-  eventUpsertFromRemote,
   eventsPruneMissing,
   remindersForOwner,
   mergeRemindersFromRemote
 } from "./db.js";
-import { taskToVTodo, parseVTodo, newUid, ParsedVTodo, eventToVEvent, parseVEvent, ParsedVEvent } from "./ical.js";
+import { taskToVTodo, parseVTodo, newUid, ParsedVTodo, eventToVEvent, parseVEvent, ParsedVEvent, EventOverride } from "./ical.js";
 
 /** Append a timestamped line to sync.log in the app's user-data folder, so sync
  *  behavior can be diagnosed after the fact. Best-effort: never breaks sync. */
@@ -79,6 +78,34 @@ function sameContent(local: Task, remote: ParsedVTodo): boolean {
 /** True when the remote VEVENT carries the same content as the local event.
  *  Same purpose as `sameContent` for tasks -- an etag-only move (typically our
  *  own last push) shouldn't be treated as a real remote edit. */
+/** Parse the JSON-text exdates/overrides columns off a local event row. */
+function localExdates(e: CalendarEvent): string[] {
+  try { return JSON.parse(e.exdates || "[]"); } catch { return []; }
+}
+function localOverrides(e: CalendarEvent): EventOverride[] {
+  try { return JSON.parse(e.overrides || "[]"); } catch { return []; }
+}
+
+/** Order-independent equality for a set of occurrence dates. */
+function sameExdates(local: string[], remote: string[]): boolean {
+  return [...local].sort().join("|") === [...remote].sort().join("|");
+}
+
+/** Order-independent equality for override lists, compared field-by-field. */
+function sameOverrides(local: EventOverride[], remote: EventOverride[]): boolean {
+  const norm = (o: EventOverride) =>
+    JSON.stringify({
+      recurrence_id: o.recurrence_id,
+      title: o.title ?? "",
+      notes: o.notes ?? "",
+      location: o.location ?? "",
+      start_date: o.start_date,
+      end_date: o.end_date ?? null,
+      all_day: o.all_day
+    });
+  return local.map(norm).sort().join("§") === remote.map(norm).sort().join("§");
+}
+
 function sameEventContent(local: CalendarEvent, remote: ParsedVEvent): boolean {
   const norm = (s: string | null | undefined) => (s ?? "").trim();
   const tagSet = (s: string | null | undefined) =>
@@ -91,7 +118,9 @@ function sameEventContent(local: CalendarEvent, remote: ParsedVEvent): boolean {
     dateEq(local.end_date, remote.end_date) &&
     (local.all_day ? 1 : 0) === remote.all_day &&
     norm(local.recurrence) === norm(remote.recurrence) &&
-    tagSet(local.tags) === tagSet(remote.tags)
+    tagSet(local.tags) === tagSet(remote.tags) &&
+    sameExdates(localExdates(local), remote.exdates) &&
+    sameOverrides(localOverrides(local), remote.overrides)
   );
 }
 
@@ -301,20 +330,9 @@ async function syncEvents(client: Client, list: TaskList) {
     for (const [uid, remote] of remoteByUid) {
       const parsed = remote.parsed;
       const local = localByUid.get(uid);
-      if (parsed.recurrence) {
-        // Recurring: server always wins, no dirty/conflict handling needed.
-        eventUpsertFromRemote(list.id, uid, remote.url, remote.etag, {
-          title: parsed.title,
-          notes: parsed.notes,
-          location: parsed.location,
-          start_date: parsed.start_date,
-          end_date: parsed.end_date,
-          all_day: parsed.all_day,
-          recurrence: parsed.recurrence,
-          tags: parsed.tags
-        });
-        continue;
-      }
+      // Recurring events flow through the same etag/dirty/conflict path as
+      // non-recurring ones (below), so local per-occurrence edits (exdates /
+      // overrides) survive a pull instead of being clobbered by the server copy.
       if (local?.deleted) {
         // Already deleted locally, just not pushed yet -- don't resurrect it
         // here. The push-delete phase below removes it from the server this
@@ -331,6 +349,8 @@ async function syncEvents(client: Client, list: TaskList) {
           end_date: parsed.end_date,
           all_day: parsed.all_day,
           recurrence: parsed.recurrence,
+          exdates: JSON.stringify(parsed.exdates),
+          overrides: JSON.stringify(parsed.overrides),
           tags: parsed.tags,
           caldav_uid: uid,
           caldav_href: remote.url,
@@ -360,6 +380,8 @@ async function syncEvents(client: Client, list: TaskList) {
             end_date: local.end_date,
             all_day: local.all_day,
             recurrence: local.recurrence,
+            exdates: local.exdates,
+            overrides: local.overrides,
             tags: local.tags,
             dirty: 1
           });
@@ -378,6 +400,8 @@ async function syncEvents(client: Client, list: TaskList) {
           end_date: parsed.end_date,
           all_day: parsed.all_day,
           recurrence: parsed.recurrence,
+          exdates: JSON.stringify(parsed.exdates),
+          overrides: JSON.stringify(parsed.overrides),
           tags: parsed.tags,
           caldav_href: remote.url,
           caldav_etag: remote.etag
@@ -388,17 +412,16 @@ async function syncEvents(client: Client, list: TaskList) {
     }
 
     // Push: local events that are new or have unpushed edits, recurring or
-    // not. Recurring events are edited/pushed as a whole series -- any edit
-    // rewrites the single master VEVENT's RRULE, there's no per-occurrence
-    // exception support (RECURRENCE-ID) yet. See docs/roadmap.md "Recurring
-    // event editing" for the follow-up if per-occurrence edits are wanted.
+    // not. A recurring master serializes its RRULE plus any EXDATEs (removed
+    // occurrences) and per-occurrence overrides (RECURRENCE-ID VEVENTs) into
+    // the single resource.
     const needEtagRefresh: { id: string; href: string; title: string }[] = [];
     const freshLocalEvents = eventsByList(list.id);
     for (const local of freshLocalEvents) {
       if (!local.caldav_uid) {
         const uid = newUid();
         const offsets = remindersForOwner("event", local.id).map((r) => r.offset_minutes);
-        const { ics } = eventToVEvent(local, uid, offsets);
+        const { ics } = eventToVEvent(local, uid, offsets, localExdates(local), localOverrides(local));
         const filename = `${uid}.ics`;
         try {
           const created = await client.createCalendarObject({
@@ -429,7 +452,7 @@ async function syncEvents(client: Client, list: TaskList) {
           continue;
         }
         const offsets = remindersForOwner("event", local.id).map((r) => r.offset_minutes);
-        const { ics } = eventToVEvent(local, undefined, offsets);
+        const { ics } = eventToVEvent(local, undefined, offsets, localExdates(local), localOverrides(local));
         const href = local.caldav_href || remote?.url || "";
         try {
           const updated = await client.updateCalendarObject({
