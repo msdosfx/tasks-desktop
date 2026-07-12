@@ -95,6 +95,55 @@ export interface CaldavAccount {
   created_at: string;
 }
 
+export interface AddressBook {
+  id: string;
+  name: string;
+  color: string;
+  sort_order: number;
+  carddav_account_id: string | null;
+  carddav_addressbook_url: string | null;
+  carddav_ctag: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Contact {
+  id: string;
+  address_book_id: string;
+  fn: string; // formatted/display name (vCard FN)
+  prefix: string;
+  first_name: string;
+  middle_name: string;
+  last_name: string;
+  suffix: string;
+  nickname: string;
+  org: string;
+  title: string; // job title
+  bday: string | null; // "YYYY-MM-DD", or "--MM-DD" for a year-less birthday
+  anniversary: string | null;
+  notes: string;
+  categories: string; // comma-separated labels
+  photo: string; // data URI (e.g. "data:image/jpeg;base64,...") or ""
+  // JSON arrays of typed values, shapes defined in vcard.ts:
+  phones: string; // [{ type, value }]
+  emails: string; // [{ type, value }]
+  addresses: string; // [{ type, street, city, region, postal, country }]
+  urls: string; // [{ type, value }]
+  impps: string; // [{ type, value }]  (instant messaging / social)
+  related: string; // [{ type, value }]
+  /** The untouched server vCard, so properties we don't model survive a
+   *  round-trip -- on push we re-emit modeled fields over this raw card. */
+  raw_vcard: string;
+  carddav_uid: string | null; // the vCard UID
+  carddav_href: string | null;
+  carddav_etag: string | null;
+  deleted: 0 | 1;
+  dirty: 0 | 1;
+  sequence: number;
+  created_at: string;
+  updated_at: string;
+}
+
 function dbPath() {
   const dir = app.getPath("userData");
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -202,6 +251,57 @@ function migrate(db: DatabaseSync) {
 
     CREATE INDEX IF NOT EXISTS idx_tasks_list ON tasks(list_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+  `);
+
+  // Contacts (CardDAV). New tables -- created on first launch after this build.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS address_books (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT '#4a90d9',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      carddav_account_id TEXT,
+      carddav_addressbook_url TEXT,
+      carddav_ctag TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS contacts (
+      id TEXT PRIMARY KEY,
+      address_book_id TEXT NOT NULL,
+      fn TEXT NOT NULL DEFAULT '',
+      prefix TEXT NOT NULL DEFAULT '',
+      first_name TEXT NOT NULL DEFAULT '',
+      middle_name TEXT NOT NULL DEFAULT '',
+      last_name TEXT NOT NULL DEFAULT '',
+      suffix TEXT NOT NULL DEFAULT '',
+      nickname TEXT NOT NULL DEFAULT '',
+      org TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL DEFAULT '',
+      bday TEXT,
+      anniversary TEXT,
+      notes TEXT NOT NULL DEFAULT '',
+      categories TEXT NOT NULL DEFAULT '',
+      photo TEXT NOT NULL DEFAULT '',
+      phones TEXT NOT NULL DEFAULT '[]',
+      emails TEXT NOT NULL DEFAULT '[]',
+      addresses TEXT NOT NULL DEFAULT '[]',
+      urls TEXT NOT NULL DEFAULT '[]',
+      impps TEXT NOT NULL DEFAULT '[]',
+      related TEXT NOT NULL DEFAULT '[]',
+      raw_vcard TEXT NOT NULL DEFAULT '',
+      carddav_uid TEXT,
+      carddav_href TEXT,
+      carddav_etag TEXT,
+      deleted INTEGER NOT NULL DEFAULT 0,
+      dirty INTEGER NOT NULL DEFAULT 0,
+      sequence INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (address_book_id) REFERENCES address_books(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_contacts_book ON contacts(address_book_id);
   `);
 
   // Older databases predate these columns.
@@ -836,4 +936,189 @@ export function remindersDueForNotification(hh: number, mm: number): ReminderDue
 
 export function reminderMarkFired(id: string) {
   getDb().prepare(`UPDATE reminders SET fired_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
+}
+
+// ---------- Address Books ----------
+export function addressBooksAll(): AddressBook[] {
+  return getDb().prepare(`SELECT * FROM address_books ORDER BY sort_order ASC, name ASC`).all() as unknown as AddressBook[];
+}
+
+export function addressBookCreate(name: string, color = "#4a90d9"): AddressBook {
+  const db = getDb();
+  const id = nanoid();
+  const now = nowIso();
+  const maxOrder = (db.prepare(`SELECT COALESCE(MAX(sort_order), -1) AS m FROM address_books`).get() as any).m as number;
+  db.prepare(
+    `INSERT INTO address_books (id, name, color, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, name, color, maxOrder + 1, now, now);
+  return db.prepare(`SELECT * FROM address_books WHERE id = ?`).get(id) as unknown as AddressBook;
+}
+
+export function addressBookUpdate(id: string, patch: Partial<AddressBook>): AddressBook {
+  const db = getDb();
+  const current = db.prepare(`SELECT * FROM address_books WHERE id = ?`).get(id) as unknown as AddressBook;
+  if (!current) throw new Error("Address book not found");
+  const merged = { ...current, ...patch, updated_at: nowIso() };
+  db.prepare(
+    `UPDATE address_books SET name=?, color=?, sort_order=?, carddav_account_id=?, carddav_addressbook_url=?, carddav_ctag=?, updated_at=? WHERE id=?`
+  ).run(
+    merged.name,
+    merged.color,
+    merged.sort_order,
+    merged.carddav_account_id,
+    merged.carddav_addressbook_url,
+    merged.carddav_ctag,
+    merged.updated_at,
+    id
+  );
+  return db.prepare(`SELECT * FROM address_books WHERE id = ?`).get(id) as unknown as AddressBook;
+}
+
+export function addressBookDelete(id: string) {
+  const db = getDb();
+  db.prepare(`DELETE FROM contacts WHERE address_book_id = ?`).run(id);
+  db.prepare(`DELETE FROM address_books WHERE id = ?`).run(id);
+}
+
+// ---------- Contacts ----------
+export function contactsAll(): Contact[] {
+  return getDb().prepare(`SELECT * FROM contacts WHERE deleted = 0 ORDER BY fn ASC`).all() as unknown as Contact[];
+}
+
+export function contactsByBook(bookId: string): Contact[] {
+  return getDb()
+    .prepare(`SELECT * FROM contacts WHERE address_book_id = ? AND deleted = 0 ORDER BY fn ASC`)
+    .all(bookId) as unknown as Contact[];
+}
+
+export function contactGet(id: string): Contact | undefined {
+  return getDb().prepare(`SELECT * FROM contacts WHERE id = ?`).get(id) as unknown as Contact | undefined;
+}
+
+export function contactCreate(input: Partial<Contact> & { address_book_id: string }): Contact {
+  const db = getDb();
+  const id = nanoid();
+  const now = nowIso();
+  db.prepare(
+    `INSERT INTO contacts (id, address_book_id, fn, prefix, first_name, middle_name, last_name, suffix, nickname, org, title, bday, anniversary, notes, categories, photo, phones, emails, addresses, urls, impps, related, raw_vcard, carddav_uid, carddav_href, carddav_etag, deleted, dirty, sequence, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?)`
+  ).run(
+    id,
+    input.address_book_id,
+    input.fn ?? "",
+    input.prefix ?? "",
+    input.first_name ?? "",
+    input.middle_name ?? "",
+    input.last_name ?? "",
+    input.suffix ?? "",
+    input.nickname ?? "",
+    input.org ?? "",
+    input.title ?? "",
+    input.bday ?? null,
+    input.anniversary ?? null,
+    input.notes ?? "",
+    input.categories ?? "",
+    input.photo ?? "",
+    input.phones ?? "[]",
+    input.emails ?? "[]",
+    input.addresses ?? "[]",
+    input.urls ?? "[]",
+    input.impps ?? "[]",
+    input.related ?? "[]",
+    input.raw_vcard ?? "",
+    input.carddav_uid ?? null,
+    input.carddav_href ?? null,
+    input.carddav_etag ?? null,
+    // Sync-created contacts arrive with a CardDAV UID and are already on the
+    // server; anything else is a local creation that still needs pushing.
+    input.dirty ?? (input.carddav_uid ? 0 : 1),
+    now,
+    now
+  );
+  return contactGet(id)!;
+}
+
+export function contactUpdate(id: string, patch: Partial<Contact>): Contact {
+  const db = getDb();
+  const current = contactGet(id);
+  if (!current) throw new Error("Contact not found");
+  // Same convention as tasks/events: an update carrying carddav_etag comes from
+  // the sync engine and leaves the contact clean; anything else is a user edit
+  // that still needs pushing.
+  const isSyncUpdate = Object.prototype.hasOwnProperty.call(patch, "carddav_etag");
+  let dirty: 0 | 1;
+  if (patch.dirty !== undefined) dirty = patch.dirty;
+  else if (isSyncUpdate) dirty = 0;
+  else dirty = 1;
+  const sequence = dirty === 1 && !isSyncUpdate ? current.sequence + 1 : current.sequence;
+  const merged: Contact = { ...current, ...patch, dirty, sequence, updated_at: nowIso() };
+  db.prepare(
+    `UPDATE contacts SET address_book_id=?, fn=?, prefix=?, first_name=?, middle_name=?, last_name=?, suffix=?, nickname=?, org=?, title=?, bday=?, anniversary=?, notes=?, categories=?, photo=?, phones=?, emails=?, addresses=?, urls=?, impps=?, related=?, raw_vcard=?, carddav_uid=?, carddav_href=?, carddav_etag=?, deleted=?, dirty=?, sequence=?, updated_at=? WHERE id=?`
+  ).run(
+    merged.address_book_id,
+    merged.fn,
+    merged.prefix,
+    merged.first_name,
+    merged.middle_name,
+    merged.last_name,
+    merged.suffix,
+    merged.nickname,
+    merged.org,
+    merged.title,
+    merged.bday,
+    merged.anniversary,
+    merged.notes,
+    merged.categories,
+    merged.photo,
+    merged.phones,
+    merged.emails,
+    merged.addresses,
+    merged.urls,
+    merged.impps,
+    merged.related,
+    merged.raw_vcard,
+    merged.carddav_uid,
+    merged.carddav_href,
+    merged.carddav_etag,
+    merged.deleted,
+    merged.dirty,
+    merged.sequence,
+    merged.updated_at,
+    id
+  );
+  return contactGet(id)!;
+}
+
+export function contactDelete(id: string, hard = false) {
+  const db = getDb();
+  if (hard) {
+    db.prepare(`DELETE FROM contacts WHERE id = ?`).run(id);
+  } else {
+    db.prepare(`UPDATE contacts SET deleted = 1, updated_at = ? WHERE id = ?`).run(nowIso(), id);
+  }
+}
+
+/** All contacts (including soft-deleted) for a book, keyed by CardDAV uid --
+ *  used by the sync engine to diff against what the server currently has. */
+export function contactsByBookWithUid(bookId: string): Map<string, Contact> {
+  const rows = getDb()
+    .prepare(`SELECT * FROM contacts WHERE address_book_id = ?`)
+    .all(bookId) as unknown as Contact[];
+  const map = new Map<string, Contact>();
+  for (const c of rows) if (c.carddav_uid) map.set(c.carddav_uid, c);
+  return map;
+}
+
+/** Removes local contacts for this book whose uid is no longer present remotely
+ *  (hard delete). Skips rows with unpushed local edits (`dirty`). */
+export function contactsPruneMissing(bookId: string, remoteUids: Set<string>) {
+  const db = getDb();
+  const local = db
+    .prepare(`SELECT id, carddav_uid, dirty FROM contacts WHERE address_book_id = ?`)
+    .all(bookId) as { id: string; carddav_uid: string | null; dirty: 0 | 1 }[];
+  for (const row of local) {
+    if (row.carddav_uid && !remoteUids.has(row.carddav_uid) && !row.dirty) {
+      db.prepare(`DELETE FROM contacts WHERE id = ?`).run(row.id);
+    }
+  }
 }
