@@ -17,7 +17,7 @@ interface Props {
   selectedTaskId: string | null;
   selectedEventId: string | null;
   onSelectTask: (id: string) => void;
-  onSelectEvent: (id: string) => void;
+  onSelectEvent: (id: string, occurrenceStart?: string | null) => void;
   /** Fires with a "YYYY-MM-DD" date, to create a new (non-recurring) event
    *  there -- double-click a blank day, or "New Event" on its context menu. */
   onCreateEvent: (dateStr: string) => void;
@@ -401,7 +401,7 @@ export default function CalendarView({
         const props = info?.event?.extendedProps ?? {};
         const id = String(info?.event?.id ?? "");
         if (props.kind === "task") onSelectTaskRef.current(props.masterId ?? id.slice(5));
-        else if (props.kind === "event") onSelectEventRef.current(props.masterId ?? id.slice(6));
+        else if (props.kind === "event") onSelectEventRef.current(props.masterId ?? id.slice(6), props.occurrenceStart ?? null);
       },
       // Drag a bar to a new day/time. `info.event`/`info.oldEvent` carry the
       // library's already-local Date start/end; the millisecond diff between

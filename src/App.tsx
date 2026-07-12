@@ -8,8 +8,9 @@ import AboutModal from "./components/AboutModal";
 import CalendarView, { CalendarShow } from "./components/CalendarView";
 import TodayPane from "./components/TodayPane";
 import EventDetailPanel from "./components/EventDetailPanel";
-import { Task, TaskList, CaldavAccountPublic, CalendarEvent } from "./types";
+import { Task, TaskList, CaldavAccountPublic, CalendarEvent, EventOverride } from "./types";
 import { selectWidth } from "./selectWidth";
+import { RRule } from "rrule";
 
 type Scope = string | "all" | "today";
 type SortMode = "priority" | "due" | "title" | "manual";
@@ -30,6 +31,27 @@ function loadSmartFilters(): SmartFilter[] {
   try { return JSON.parse(localStorage.getItem("smartFilters") || "[]"); } catch { return []; }
 }
 
+/** Epoch ms for an occurrence key, tolerant of date-only vs datetime, so a
+ *  RECURRENCE-ID / EXDATE matches the occurrence regardless of string format. */
+function occEpoch(v: string): number {
+  return new Date(v.length <= 10 ? `${v}T00:00:00Z` : v).getTime();
+}
+function parseJsonArr<T>(s: string | undefined): T[] {
+  try { const v = JSON.parse(s || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+/** Cap a recurrence rule so its last occurrence falls strictly before
+ *  `boundary` (the split occurrence). Used by the "this and following" split. */
+function addUntilToRule(rruleStr: string, boundary: string): string {
+  try {
+    const opts = RRule.parseString(rruleStr);
+    delete (opts as any).count; // UNTIL and COUNT are mutually exclusive
+    opts.until = new Date(occEpoch(boundary) - 1000);
+    return RRule.optionsToString(opts).replace(/^RRULE:/, "");
+  } catch {
+    return rruleStr;
+  }
+}
+
 export default function App() {
   const [lists, setLists] = useState<TaskList[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -46,6 +68,9 @@ export default function App() {
   const [scope, setScope] = useState<Scope>("all");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  // The specific occurrence (RECURRENCE-ID) the user opened, set when a
+  // recurring event is clicked on the calendar; null when selected another way.
+  const [selectedEventOccurrence, setSelectedEventOccurrence] = useState<string | null>(null);
   // Experimental: collapses the Today pane + detail panel column, and/or the
   // sidebar, so the calendar/task table can use the freed width.
   const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem("railCollapsed") === "1");
@@ -60,9 +85,10 @@ export default function App() {
     setSelectedTaskId(id);
     if (id) setRailCollapsed(false);
   }
-  function selectEvent(id: string | null) {
+  function selectEvent(id: string | null, occurrenceStart: string | null = null) {
     setSelectedTaskId(null);
     setSelectedEventId(id);
+    setSelectedEventOccurrence(occurrenceStart);
     if (id) setRailCollapsed(false);
   }
   const [search, setSearch] = useState("");
@@ -367,6 +393,62 @@ export default function App() {
     if (selectedEventId === id) selectEvent(null);
     await loadEvents();
     scheduleDirtySync();
+  }
+
+  /** Edit just one occurrence ("this") or the occurrence onward ("following")
+   *  of a recurring event. "all" edits go through updateEvent directly. */
+  async function updateEventScoped(scope: "this" | "following", masterId: string, occurrenceStart: string, patch: Partial<CalendarEvent>) {
+    const ev = events.find((e) => e.id === masterId);
+    if (!ev) return;
+    if (scope === "this") {
+      const overrides = parseJsonArr<EventOverride>(ev.overrides)
+        .filter((o) => occEpoch(o.recurrence_id) !== occEpoch(occurrenceStart));
+      overrides.push({
+        recurrence_id: occurrenceStart,
+        title: patch.title,
+        notes: patch.notes,
+        location: patch.location,
+        start_date: patch.start_date!,
+        end_date: patch.end_date ?? null,
+        all_day: patch.all_day ?? ev.all_day
+      });
+      // Editing an occurrence also un-skips it if it had been deleted before.
+      const exdates = parseJsonArr<string>(ev.exdates).filter((x) => occEpoch(x) !== occEpoch(occurrenceStart));
+      await updateEvent(masterId, { overrides: JSON.stringify(overrides), exdates: JSON.stringify(exdates) });
+      return;
+    }
+    // "following": cap the existing series before this occurrence, then start a
+    // fresh series from here carrying the edited fields.
+    await window.api.events?.update(masterId, { recurrence: addUntilToRule(ev.recurrence!, occurrenceStart) });
+    await window.api.events?.create({
+      list_id: ev.list_id,
+      title: patch.title ?? ev.title,
+      notes: patch.notes ?? ev.notes,
+      location: patch.location ?? ev.location,
+      start_date: patch.start_date!,
+      end_date: patch.end_date ?? null,
+      all_day: patch.all_day ?? ev.all_day,
+      recurrence: ev.recurrence,
+      tags: patch.tags ?? ev.tags
+    });
+    await loadEvents();
+    scheduleDirtySync();
+  }
+
+  /** Delete just one occurrence ("this", via EXDATE) or the occurrence onward
+   *  ("following", via a truncating UNTIL) of a recurring event. */
+  async function deleteEventScoped(scope: "this" | "following", masterId: string, occurrenceStart: string) {
+    const ev = events.find((e) => e.id === masterId);
+    if (!ev) return;
+    if (scope === "this") {
+      const exdates = parseJsonArr<string>(ev.exdates);
+      if (!exdates.some((x) => occEpoch(x) === occEpoch(occurrenceStart))) exdates.push(occurrenceStart);
+      const overrides = parseJsonArr<EventOverride>(ev.overrides)
+        .filter((o) => occEpoch(o.recurrence_id) !== occEpoch(occurrenceStart));
+      await updateEvent(masterId, { exdates: JSON.stringify(exdates), overrides: JSON.stringify(overrides) });
+      return;
+    }
+    await updateEvent(masterId, { recurrence: addUntilToRule(ev.recurrence!, occurrenceStart) });
   }
 
   /** "New Task" on a calendar day's right-click menu -- creates a task due
@@ -756,8 +838,11 @@ export default function App() {
             event={events.find((e) => e.id === selectedEventId) || null}
             lists={lists}
             allCategories={allCategories}
+            occurrenceStart={selectedEventOccurrence}
             onUpdate={updateEvent}
             onDelete={deleteEvent}
+            onUpdateScoped={updateEventScoped}
+            onDeleteScoped={deleteEventScoped}
           />
         ) : (
           <DetailPanel
