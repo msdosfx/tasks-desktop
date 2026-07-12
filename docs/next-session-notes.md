@@ -1,5 +1,15 @@
 # Notes for next session
 
+## 2026-07-12 — packaged .exe shows the Electron logo, not the green app icon
+User reports the installed Windows .exe (from a GitHub release) displays the default Electron
+logo instead of the app's green icon. Likely one or more of:
+- `build/icon.ico` missing / invalid / not actually the green logo — verify it exists and is a
+  proper multi-resolution .ico (`package.json` build.win.icon = "build/icon.ico").
+- `BrowserWindow({ icon: ... })` is never set in `electron/main.ts`, so the window/taskbar icon
+  falls back to the generic Electron logo (see the 2026-07-09 tray/taskbar-icon note below). Set
+  it to the green icon for packaged (and ideally dev) runs.
+- Confirm electron-builder actually embeds `win.icon` into the NSIS installer + the exe.
+
 Updated 2026-07-09 (same session, continued): CalDAV VALARM sync described below as "next" is
 now implemented — `electron/ical.ts` (VALARM serialize/parse + `reminderOffsets` on
 `taskToVTodo`/`eventToVEvent`/`ParsedVTodo`/`ParsedVEvent`), `electron/db.ts`
