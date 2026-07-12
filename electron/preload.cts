@@ -30,6 +30,22 @@ const api = {
     update: (id: string, patch: any) => ipcRenderer.invoke("events:update", id, patch),
     delete: (id: string, hard?: boolean) => ipcRenderer.invoke("events:delete", id, hard)
   },
+  addressbooks: {
+    all: () => ipcRenderer.invoke("addressbooks:all"),
+    create: (name: string, color?: string) => ipcRenderer.invoke("addressbooks:create", name, color),
+    update: (id: string, patch: any) => ipcRenderer.invoke("addressbooks:update", id, patch),
+    delete: (id: string) => ipcRenderer.invoke("addressbooks:delete", id),
+    discover: (accountId: string) => ipcRenderer.invoke("addressbooks:discover", accountId),
+    link: (bookId: string, accountId: string, url: string) => ipcRenderer.invoke("addressbooks:link", bookId, accountId, url),
+    unlink: (bookId: string) => ipcRenderer.invoke("addressbooks:unlink", bookId)
+  },
+  contacts: {
+    all: () => ipcRenderer.invoke("contacts:all"),
+    byBook: (bookId: string) => ipcRenderer.invoke("contacts:byBook", bookId),
+    create: (input: any) => ipcRenderer.invoke("contacts:create", input),
+    update: (id: string, patch: any) => ipcRenderer.invoke("contacts:update", id, patch),
+    delete: (id: string, hard?: boolean) => ipcRenderer.invoke("contacts:delete", id, hard)
+  },
   reminders: {
     for: (ownerType: "task" | "event", ownerId: string) => ipcRenderer.invoke("reminders:for", ownerType, ownerId),
     create: (ownerType: "task" | "event", ownerId: string, offsetMinutes: number) =>

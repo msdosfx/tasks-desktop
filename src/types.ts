@@ -82,6 +82,70 @@ export interface DiscoveredCalendar {
   color: string | null;
 }
 
+export interface AddressBook {
+  id: string;
+  name: string;
+  color: string;
+  sort_order: number;
+  carddav_account_id: string | null;
+  carddav_addressbook_url: string | null;
+  carddav_ctag: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TypedValue { type: string; value: string; }
+export interface PostalAddress {
+  type: string;
+  street: string;
+  city: string;
+  region: string;
+  postal: string;
+  country: string;
+}
+
+/** A contact row. The multi-value fields (phones/emails/addresses/urls/impps/
+ *  related) are JSON-text as stored in the DB -- parse before use. */
+export interface Contact {
+  id: string;
+  address_book_id: string;
+  fn: string;
+  prefix: string;
+  first_name: string;
+  middle_name: string;
+  last_name: string;
+  suffix: string;
+  nickname: string;
+  org: string;
+  title: string;
+  bday: string | null;
+  anniversary: string | null;
+  notes: string;
+  categories: string;
+  photo: string;
+  phones: string;
+  emails: string;
+  addresses: string;
+  urls: string;
+  impps: string;
+  related: string;
+  raw_vcard: string;
+  carddav_uid: string | null;
+  carddav_href: string | null;
+  carddav_etag: string | null;
+  deleted: 0 | 1;
+  dirty?: 0 | 1;
+  sequence: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DiscoveredAddressBook {
+  url: string;
+  displayName: string;
+  ctag: string | null;
+}
+
 export const PRIORITY_LABELS: Record<number, string> = {
   0: "None",
   1: "High",
@@ -129,6 +193,24 @@ declare global {
         all: () => Promise<CalendarEvent[]>;
         create: (input: Partial<CalendarEvent> & { list_id: string; title: string; start_date: string }) => Promise<CalendarEvent>;
         update: (id: string, patch: Partial<CalendarEvent>) => Promise<CalendarEvent>;
+        delete: (id: string, hard?: boolean) => Promise<void>;
+      };
+      /** Absent in the Thunderbird add-on shim -- always optional-chain. */
+      addressbooks?: {
+        all: () => Promise<AddressBook[]>;
+        create: (name: string, color?: string) => Promise<AddressBook>;
+        update: (id: string, patch: Partial<AddressBook>) => Promise<AddressBook>;
+        delete: (id: string) => Promise<void>;
+        discover: (accountId: string) => Promise<DiscoveredAddressBook[]>;
+        link: (bookId: string, accountId: string, url: string) => Promise<void>;
+        unlink: (bookId: string) => Promise<void>;
+      };
+      /** Absent in the Thunderbird add-on shim -- always optional-chain. */
+      contacts?: {
+        all: () => Promise<Contact[]>;
+        byBook: (bookId: string) => Promise<Contact[]>;
+        create: (input: Partial<Contact> & { address_book_id: string }) => Promise<Contact>;
+        update: (id: string, patch: Partial<Contact>) => Promise<Contact>;
         delete: (id: string, hard?: boolean) => Promise<void>;
       };
       /** Absent in the Thunderbird add-on shim -- always optional-chain. */

@@ -32,9 +32,19 @@ import {
   reminderCreateForOwner,
   reminderDeleteForOwner,
   remindersDueForNotification,
-  reminderMarkFired
+  reminderMarkFired,
+  addressBooksAll,
+  addressBookCreate,
+  addressBookUpdate,
+  addressBookDelete,
+  contactsAll,
+  contactsByBook,
+  contactCreate,
+  contactUpdate,
+  contactDelete
 } from "./db.js";
 import { testConnection, discoverCalendars, linkListToCalendar, unlinkList, syncAccount, createServerCalendar, encryptPassword } from "./caldav.js";
+import { discoverAddressBooks, linkAddressBook, unlinkAddressBook, syncAccountContacts } from "./carddav.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -319,6 +329,24 @@ function registerIpc() {
   ipcMain.handle("events:update", (_e, id: string, patch: any) => eventUpdate(id, patch));
   ipcMain.handle("events:delete", (_e, id: string, hard?: boolean) => eventDelete(id, hard));
 
+  ipcMain.handle("addressbooks:all", () => addressBooksAll());
+  ipcMain.handle("addressbooks:create", (_e, name: string, color?: string) => addressBookCreate(name, color));
+  ipcMain.handle("addressbooks:update", (_e, id: string, patch: any) => addressBookUpdate(id, patch));
+  ipcMain.handle("addressbooks:delete", (_e, id: string) => addressBookDelete(id));
+  ipcMain.handle("addressbooks:discover", async (_e, accountId: string) => {
+    const account = accountsAll().find((a) => a.id === accountId);
+    if (!account) throw new Error("Account not found");
+    return discoverAddressBooks(account);
+  });
+  ipcMain.handle("addressbooks:link", (_e, bookId: string, accountId: string, url: string) => linkAddressBook(bookId, accountId, url));
+  ipcMain.handle("addressbooks:unlink", (_e, bookId: string) => unlinkAddressBook(bookId));
+
+  ipcMain.handle("contacts:all", () => contactsAll());
+  ipcMain.handle("contacts:byBook", (_e, bookId: string) => contactsByBook(bookId));
+  ipcMain.handle("contacts:create", (_e, input: any) => contactCreate(input));
+  ipcMain.handle("contacts:update", (_e, id: string, patch: any) => contactUpdate(id, patch));
+  ipcMain.handle("contacts:delete", (_e, id: string, hard?: boolean) => contactDelete(id, hard));
+
   ipcMain.handle("reminders:for", (_e, ownerType: "task" | "event", ownerId: string) => remindersForOwner(ownerType, ownerId));
   ipcMain.handle("reminders:create", (_e, ownerType: "task" | "event", ownerId: string, offsetMinutes: number) =>
     reminderCreateForOwner(ownerType, ownerId, offsetMinutes)
@@ -364,6 +392,18 @@ function registerIpc() {
     const account = accountsAll().find((a) => a.id === accountId);
     if (!account) throw new Error("Account not found");
     const results = await syncAccount(account);
+    // Also sync contacts, but only if this account has a linked address book --
+    // avoids opening a CardDAV client (and a spurious error) on calendar-only
+    // accounts. Contact results fold into the same list the UI aggregates.
+    const hasBooks = addressBooksAll().some((b) => b.carddav_account_id === accountId && b.carddav_addressbook_url);
+    if (hasBooks) {
+      try {
+        const contactResults = await syncAccountContacts(account);
+        for (const r of contactResults) results.push({ listId: r.bookId, pulled: r.pulled, pushed: r.pushed, errors: r.errors });
+      } catch (err: any) {
+        console.error("carddav sync failed:", err?.message || err);
+      }
+    }
     accountUpdate(accountId, {
       last_sync_at: new Date().toISOString(),
       last_sync_status: results.some((r) => r.errors.length) ? "error" : "ok"
