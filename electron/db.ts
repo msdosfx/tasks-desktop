@@ -356,6 +356,16 @@ function migrate(db: DatabaseSync) {
       `INSERT INTO lists (id, name, color, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
     ).run(nanoid(), "Tasks", "#4a90d9", 0, now, now);
   }
+
+  // Ensure a default address book exists so new contacts always have a home
+  // (link it to a CardDAV address book later to sync).
+  const bookCount = db.prepare("SELECT COUNT(*) AS c FROM address_books").get() as { c: number };
+  if (bookCount.c === 0) {
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO address_books (id, name, color, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(nanoid(), "Contacts", "#4a90d9", 0, now, now);
+  }
 }
 
 const nowIso = () => new Date().toISOString();

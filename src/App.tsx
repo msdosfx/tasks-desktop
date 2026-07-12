@@ -8,7 +8,9 @@ import AboutModal from "./components/AboutModal";
 import CalendarView, { CalendarShow } from "./components/CalendarView";
 import TodayPane from "./components/TodayPane";
 import EventDetailPanel from "./components/EventDetailPanel";
-import { Task, TaskList, CaldavAccountPublic, CalendarEvent } from "./types";
+import ContactsView from "./components/ContactsView";
+import ContactDetailPanel from "./components/ContactDetailPanel";
+import { Task, TaskList, CaldavAccountPublic, CalendarEvent, Contact, AddressBook } from "./types";
 import { selectWidth } from "./selectWidth";
 
 type Scope = string | "all" | "today";
@@ -34,7 +36,7 @@ export default function App() {
   const [lists, setLists] = useState<TaskList[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [mainView, setMainView] = useState<"tasks" | "calendar">("tasks");
+  const [mainView, setMainView] = useState<"tasks" | "calendar" | "contacts">("tasks");
   const [calendarShow, setCalendarShow] = useState<CalendarShow>(
     () => (localStorage.getItem("calendarShow") as CalendarShow) || "both"
   );
@@ -46,6 +48,10 @@ export default function App() {
   const [scope, setScope] = useState<Scope>("all");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [addressBooks, setAddressBooks] = useState<AddressBook[]>([]);
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+  const [contactBookFilter, setContactBookFilter] = useState("all");
   // Experimental: collapses the Today pane + detail panel column, and/or the
   // sidebar, so the calendar/task table can use the freed width.
   const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem("railCollapsed") === "1");
@@ -57,12 +63,20 @@ export default function App() {
   // it was collapsed, so its details are actually visible.
   function selectTask(id: string | null) {
     setSelectedEventId(null);
+    setSelectedContactId(null);
     setSelectedTaskId(id);
     if (id) setRailCollapsed(false);
   }
   function selectEvent(id: string | null) {
     setSelectedTaskId(null);
+    setSelectedContactId(null);
     setSelectedEventId(id);
+    if (id) setRailCollapsed(false);
+  }
+  function selectContact(id: string | null) {
+    setSelectedTaskId(null);
+    setSelectedEventId(null);
+    setSelectedContactId(id);
     if (id) setRailCollapsed(false);
   }
   const [search, setSearch] = useState("");
@@ -182,8 +196,10 @@ export default function App() {
   const loadAccounts = useCallback(async () => setAccounts(await window.api.accounts.all()), []);
   // Absent in the Thunderbird add-on shim -- always optional-chain.
   const loadEvents = useCallback(async () => setEvents((await window.api.events?.all()) ?? []), []);
+  const loadContacts = useCallback(async () => setContacts((await window.api.contacts?.all()) ?? []), []);
+  const loadAddressBooks = useCallback(async () => setAddressBooks((await window.api.addressbooks?.all()) ?? []), []);
 
-  useEffect(() => { loadLists(); loadTasks(); loadAccounts(); loadEvents(); }, [loadLists, loadTasks, loadAccounts, loadEvents]);
+  useEffect(() => { loadLists(); loadTasks(); loadAccounts(); loadEvents(); loadContacts(); loadAddressBooks(); }, [loadLists, loadTasks, loadAccounts, loadEvents, loadContacts, loadAddressBooks]);
 
   useEffect(() => {
     const offs = [
@@ -369,6 +385,29 @@ export default function App() {
     scheduleDirtySync();
   }
 
+  async function createContact() {
+    const book = contactBookFilter !== "all" ? contactBookFilter : addressBooks[0]?.id;
+    if (!book) return;
+    const c = await window.api.contacts?.create({ address_book_id: book, fn: "New contact", first_name: "New", last_name: "contact" });
+    if (!c) return;
+    await loadContacts();
+    selectContact(c.id);
+    scheduleDirtySync();
+  }
+
+  async function updateContact(id: string, patch: Partial<Contact>) {
+    await window.api.contacts?.update(id, patch);
+    await loadContacts();
+    scheduleDirtySync();
+  }
+
+  async function deleteContact(id: string) {
+    await window.api.contacts?.delete(id);
+    if (selectedContactId === id) selectContact(null);
+    await loadContacts();
+    scheduleDirtySync();
+  }
+
   /** "New Task" on a calendar day's right-click menu -- creates a task due
    *  that day, using the same list-picking rule as the calendar's own
    *  new-event creation. A full ISO datetime (week/day-view time-slot click)
@@ -524,6 +563,8 @@ export default function App() {
       await loadTasks();
       await loadLists();
       await loadEvents();
+      await loadContacts();
+      await loadAddressBooks();
       if (errors.length) setSyncMsg(`Synced with errors: ${errors[0]}`);
       else if (!auto || pulled || pushed) setSyncMsg(`Synced — ${pulled} pulled, ${pushed} pushed.`);
     } catch (err: any) {
@@ -618,6 +659,7 @@ export default function App() {
         <div className="view-tabs">
           <button className={mainView === "tasks" ? "active" : ""} onClick={() => setMainView("tasks")}>Tasks</button>
           <button className={mainView === "calendar" ? "active" : ""} onClick={() => setMainView("calendar")}>Calendar</button>
+          <button className={mainView === "contacts" ? "active" : ""} onClick={() => setMainView("contacts")}>Contacts</button>
         </div>
         {mainView === "calendar" ? (
           <CalendarView
@@ -636,6 +678,16 @@ export default function App() {
             onSetListFilter={setCalendarListFilter}
             onUpdateEvent={updateEvent}
             onUpdateTask={updateTask}
+          />
+        ) : mainView === "contacts" ? (
+          <ContactsView
+            contacts={contacts}
+            addressBooks={addressBooks}
+            selectedContactId={selectedContactId}
+            onSelect={selectContact}
+            onCreate={createContact}
+            bookFilter={contactBookFilter}
+            onSetBookFilter={setContactBookFilter}
           />
         ) : (
         <>
@@ -751,7 +803,14 @@ export default function App() {
           collapsed={railCollapsed}
           onToggleCollapsed={() => setRailCollapsed(!railCollapsed)}
         />
-        {!railCollapsed && (selectedEventId ? (
+        {!railCollapsed && (selectedContactId ? (
+          <ContactDetailPanel
+            contact={contacts.find((c) => c.id === selectedContactId) || null}
+            addressBooks={addressBooks}
+            onUpdate={updateContact}
+            onDelete={deleteContact}
+          />
+        ) : selectedEventId ? (
           <EventDetailPanel
             event={events.find((e) => e.id === selectedEventId) || null}
             lists={lists}
