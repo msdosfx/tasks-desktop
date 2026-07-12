@@ -17,8 +17,8 @@ input, textarea, select { user-select: text; }
   height: 100vh;
 }
 /* Experimental: collapses the Today pane + detail panel column down to a thin
-   strip holding just the "‹" re-expand tab, so the calendar/task table can
-   use the freed width. Same idea on the other side for the sidebar ("›"). */
+   strip holding just the "â€¹" re-expand tab, so the calendar/task table can
+   use the freed width. Same idea on the other side for the sidebar ("â€º"). */
 .app.rail-collapsed { grid-template-columns: 220px 1fr 28px; }
 .app.sidebar-collapsed { grid-template-columns: 28px 1fr 320px; }
 .app.sidebar-collapsed.rail-collapsed { grid-template-columns: 28px 1fr 28px; }
@@ -177,7 +177,7 @@ input, textarea, select { user-select: text; }
   margin-top: 2px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; cursor: pointer;
 }
 .task-row .checkbox.done { background: #4a90d9; border-color: #4a90d9; }
-.task-row .checkbox.done::after { content: "✓"; font-size: 10px; color: #fff; }
+.task-row .checkbox.done::after { content: "âœ“"; font-size: 10px; color: #fff; }
 .task-row .priority-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
 .task-row .title-col { flex: 1; min-width: 0; }
 .task-row .title { font-size: 13px; }
@@ -273,7 +273,7 @@ input, textarea, select { user-select: text; }
 
 /* ---------- Detail panel ---------- */
 .right-rail { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-/* The "‹" tab shown in place of the whole panel while collapsed. Padding and
+/* The "â€¹" tab shown in place of the whole panel while collapsed. Padding and
    font-size deliberately match .view-tabs button exactly (both sit in a
    zero-padding container of their own), so the border-bottom lines up in a
    single straight line across the main column and this one. */
@@ -506,4 +506,21 @@ input, textarea, select { user-select: text; }
   flex: 0 0 auto; white-space: nowrap;
 }
 .save-view-btn:hover { background: #232326; color: #fff; }
-.sav
+.save-view-input {
+  background: #26272a; border: 1px solid #4a90d9; border-radius: 6px;
+  padding: 4px 8px; color: #e6e6e6; font-size: 12px; width: 160px;
+}
+.task-row.drag-over { border-top: 2px solid #4a90d9; }
+.task-row[draggable="true"] { cursor: grab; }
+
+/* ---------- Preferences ---------- */
+.prefs-grid { display: flex; flex-direction: column; gap: 8px; }
+.pref-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: #c8c8c8; cursor: pointer;
+}
+.pref-row input[type="time"], .pref-row select {
+  background: #26272a; border: 1px solid #34353a; border-radius: 6px;
+  padding: 3px 6px; color: #e6e6e6; font-size: 12px;
+}
+.pref-indent { padding-left: 24px; color: #9aa0a6; }
