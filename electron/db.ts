@@ -59,6 +59,10 @@ export interface CalendarEvent {
   end_date: string | null; // ISO date or datetime; null = same instant as start
   all_day: 0 | 1;
   recurrence: string | null; // RRULE string, no "RRULE:" prefix
+  /** JSON array of ISO occurrence-start strings removed from the series (EXDATE). */
+  exdates: string;
+  /** JSON array of EventOverride objects (per-occurrence edits; see ical.ts). */
+  overrides: string;
   tags: string; // comma-separated
   caldav_uid: string | null;
   caldav_href: string | null;
@@ -160,6 +164,8 @@ function migrate(db: DatabaseSync) {
       end_date TEXT,
       all_day INTEGER NOT NULL DEFAULT 0,
       recurrence TEXT,
+      exdates TEXT NOT NULL DEFAULT '[]',
+      overrides TEXT NOT NULL DEFAULT '[]',
       tags TEXT NOT NULL DEFAULT '',
       caldav_uid TEXT,
       caldav_href TEXT,
@@ -211,6 +217,8 @@ function migrate(db: DatabaseSync) {
   try { db.exec(`ALTER TABLE events ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE tasks ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE events ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
+  try { db.exec(`ALTER TABLE events ADD COLUMN exdates TEXT NOT NULL DEFAULT '[]'`); } catch { /* already present */ }
+  try { db.exec(`ALTER TABLE events ADD COLUMN overrides TEXT NOT NULL DEFAULT '[]'`); } catch { /* already present */ }
 
   // One-time (idempotent -- safe to run every launch) backfill: reminders used
   // to be implicit (every due task notified automatically via the old
@@ -490,8 +498,8 @@ export function eventCreate(input: Partial<CalendarEvent> & { list_id: string; t
   const id = nanoid();
   const now = nowIso();
   db.prepare(
-    `INSERT INTO events (id, list_id, title, notes, location, start_date, end_date, all_day, recurrence, tags, caldav_uid, caldav_href, caldav_etag, deleted, dirty, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
+    `INSERT INTO events (id, list_id, title, notes, location, start_date, end_date, all_day, recurrence, exdates, overrides, tags, caldav_uid, caldav_href, caldav_etag, deleted, dirty, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
   ).run(
     id,
     input.list_id,
@@ -502,6 +510,8 @@ export function eventCreate(input: Partial<CalendarEvent> & { list_id: string; t
     input.end_date ?? null,
     input.all_day ?? 1,
     input.recurrence ?? null,
+    input.exdates ?? "[]",
+    input.overrides ?? "[]",
     input.tags ?? "",
     input.caldav_uid ?? null,
     input.caldav_href ?? null,
@@ -533,7 +543,7 @@ export function eventUpdate(id: string, patch: Partial<CalendarEvent>): Calendar
   const merged: CalendarEvent = { ...current, ...patch, dirty, sequence, updated_at: nowIso() };
   db.prepare(
     `UPDATE events SET list_id=?, title=?, notes=?, location=?, start_date=?, end_date=?, all_day=?,
-     recurrence=?, tags=?, caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, sequence=?, updated_at=?
+     recurrence=?, exdates=?, overrides=?, tags=?, caldav_uid=?, caldav_href=?, caldav_etag=?, deleted=?, dirty=?, sequence=?, updated_at=?
      WHERE id=?`
   ).run(
     merged.list_id,
@@ -544,6 +554,8 @@ export function eventUpdate(id: string, patch: Partial<CalendarEvent>): Calendar
     merged.end_date,
     merged.all_day,
     merged.recurrence,
+    merged.exdates,
+    merged.overrides,
     merged.tags,
     merged.caldav_uid,
     merged.caldav_href,
@@ -593,7 +605,7 @@ export function eventUpsertFromRemote(
   uid: string,
   href: string,
   etag: string,
-  parsed: Omit<CalendarEvent, "id" | "list_id" | "caldav_uid" | "caldav_href" | "caldav_etag" | "deleted" | "dirty" | "sequence" | "created_at" | "updated_at">
+  parsed: Omit<CalendarEvent, "id" | "list_id" | "caldav_uid" | "caldav_href" | "caldav_etag" | "deleted" | "dirty" | "sequence" | "exdates" | "overrides" | "created_at" | "updated_at">
 ): void {
   const db = getDb();
   const now = nowIso();
