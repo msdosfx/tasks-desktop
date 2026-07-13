@@ -9,7 +9,9 @@ import CalendarView, { CalendarShow } from "./components/CalendarView";
 import TodayPane from "./components/TodayPane";
 import EventDetailPanel from "./components/EventDetailPanel";
 import ContactsView from "./components/ContactsView";
+import ContactsSidebar from "./components/ContactsSidebar";
 import ContactDetailPanel from "./components/ContactDetailPanel";
+import { ContactFilter, LabelColors, toggleFavoriteCategories } from "./contactUtils";
 import { Task, TaskList, CaldavAccountPublic, CalendarEvent, Contact, AddressBook } from "./types";
 import { selectWidth } from "./selectWidth";
 
@@ -51,7 +53,8 @@ export default function App() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [addressBooks, setAddressBooks] = useState<AddressBook[]>([]);
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
-  const [contactBookFilter, setContactBookFilter] = useState("all");
+  const [contactFilter, setContactFilter] = useState<ContactFilter>({ kind: "all" });
+  const [labelColors, setLabelColors] = useState<LabelColors>({});
   // Experimental: collapses the Today pane + detail panel column, and/or the
   // sidebar, so the calendar/task table can use the freed width.
   const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem("railCollapsed") === "1");
@@ -198,8 +201,12 @@ export default function App() {
   const loadEvents = useCallback(async () => setEvents((await window.api.events?.all()) ?? []), []);
   const loadContacts = useCallback(async () => setContacts((await window.api.contacts?.all()) ?? []), []);
   const loadAddressBooks = useCallback(async () => setAddressBooks((await window.api.addressbooks?.all()) ?? []), []);
+  const loadLabelColors = useCallback(async () => {
+    const s = (await window.api.settings?.all()) ?? {};
+    try { setLabelColors(JSON.parse(s.contactLabelColors || "{}")); } catch { setLabelColors({}); }
+  }, []);
 
-  useEffect(() => { loadLists(); loadTasks(); loadAccounts(); loadEvents(); loadContacts(); loadAddressBooks(); }, [loadLists, loadTasks, loadAccounts, loadEvents, loadContacts, loadAddressBooks]);
+  useEffect(() => { loadLists(); loadTasks(); loadAccounts(); loadEvents(); loadContacts(); loadAddressBooks(); loadLabelColors(); }, [loadLists, loadTasks, loadAccounts, loadEvents, loadContacts, loadAddressBooks, loadLabelColors]);
 
   useEffect(() => {
     const offs = [
@@ -386,12 +393,30 @@ export default function App() {
   }
 
   async function createContact() {
-    const book = contactBookFilter !== "all" ? contactBookFilter : addressBooks[0]?.id;
+    const book = contactFilter.kind === "book" ? contactFilter.value : addressBooks[0]?.id;
     if (!book) return;
     const c = await window.api.contacts?.create({ address_book_id: book, fn: "New contact", first_name: "New", last_name: "contact" });
     if (!c) return;
     await loadContacts();
     selectContact(c.id);
+    scheduleDirtySync();
+  }
+
+  async function createAddressBook(name: string) {
+    await window.api.addressbooks?.create(name);
+    await loadAddressBooks();
+  }
+
+  async function setLabelColor(label: string, color: string | null) {
+    const next = { ...labelColors };
+    if (color) next[label] = color; else delete next[label];
+    setLabelColors(next);
+    await window.api.settings?.set("contactLabelColors", JSON.stringify(next));
+  }
+
+  async function toggleFavorite(c: Contact) {
+    await window.api.contacts?.update(c.id, { categories: toggleFavoriteCategories(c) });
+    await loadContacts();
     scheduleDirtySync();
   }
 
@@ -629,6 +654,22 @@ export default function App() {
 
   return (
     <div className={`app ${railCollapsed ? "rail-collapsed" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      {mainView === "contacts" ? (
+        <ContactsSidebar
+          addressBooks={addressBooks}
+          contacts={contacts}
+          filter={contactFilter}
+          onSelect={setContactFilter}
+          onCreateBook={createAddressBook}
+          labelColors={labelColors}
+          onSetLabelColor={setLabelColor}
+          onSync={() => runSync()}
+          syncing={syncing}
+          onOpenSettings={() => setShowSettings(true)}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)}
+        />
+      ) : (
       <Sidebar
         lists={lists}
         tasks={tasks}
@@ -654,6 +695,7 @@ export default function App() {
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
+      )}
 
       <div className="main">
         <div className="view-tabs">
@@ -682,12 +724,12 @@ export default function App() {
         ) : mainView === "contacts" ? (
           <ContactsView
             contacts={contacts}
-            addressBooks={addressBooks}
+            filter={contactFilter}
+            labelColors={labelColors}
             selectedContactId={selectedContactId}
             onSelect={selectContact}
             onCreate={createContact}
-            bookFilter={contactBookFilter}
-            onSetBookFilter={setContactBookFilter}
+            onToggleFavorite={toggleFavorite}
           />
         ) : (
         <>

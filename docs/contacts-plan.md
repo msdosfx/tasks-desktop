@@ -198,8 +198,40 @@ Also done 2026-07-12: separate **`carddav_url`** on the account (Synology hosts
 CardDAV at a different address than CalDAV) — schema + `carddav.ts` client +
 renderer type; the account-settings CardDAV section (phase 3b) collects it.
 
-Still to build: context-aware sidebar (address books), Today-pane labels,
-CardDAV account/link UI in Settings.
+Still to build: context-aware sidebar (address books + "★ Favorites" pin +
+labels), Today-pane **upcoming birthdays/anniversaries** (rail), CardDAV
+account/link UI in Settings.
+
+Decided 2026-07-12 (design walkthrough):
+- **No filters in the main panel** — the toolbar is just search + New contact;
+  all collection-picking (books, ★ Favorites, labels) lives in the sidebar,
+  one active collection at a time. (Removes the toolbar book/label dropdowns.)
+- Contact rows: name (First Last) + secondary line (org / first email or phone)
+  + star toggle + colored label dots; initials-circle avatar now, photo in P6.
+- Birthdays rail: next ~5 within a year, name/date/age/days-until, anniversaries
+  included, click opens contact, shows ALL contacts regardless of sidebar filter.
+- CardDAV linking: one account holds both CalDAV + CardDAV URLs; add the CardDAV
+  URL + discover/link to the existing account settings (not a separate system).
+- Label colors: right-click a label in the sidebar to set color (palette), stored
+  as a settings-JSON label->color map (no new table); dots on chips/sidebar/rows.
+
+**Groups (KIND:group) — likely needed later for cross-compat.** Category-based
+grouping round-trips to Synology/Nextcloud, but Apple/iOS represents groups as
+real `KIND:group` vCards with `MEMBER` UIDs. So true container-groups will be
+needed if syncing with Apple. Keep on the roadmap (was P6; elevate when Apple
+interop matters).
+
+**Favorites** (agreed 2026-07-12): Google model — a **star toggle** that's a
+reserved label under the hood, so it's a "★ Favorites" sidebar pin AND a filter
+value from one mechanism, and it syncs via `CATEGORIES`. Special-cased in the UI
+(rendered as a star, kept out of the normal label chips).
+
+**Category/label colors** (explicit TODO, 2026-07-12): Thunderbird-style — a
+color per label, shown as colored dots on label chips, the label filter, the
+sidebar labels, and contact rows. Needs a small **label→color store** (a
+`label_colors` table or a settings-JSON map, since labels are plain
+`CATEGORIES` strings, not entities). **Unshelved 2026-07-12 — build as part of
+the phase 3 UI, not deferred.**
 
 ## 6. Decisions (resolved 2026-07-12)
 

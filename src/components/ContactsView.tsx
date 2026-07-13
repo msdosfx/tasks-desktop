@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
-import { Contact, AddressBook } from "../types";
-import { selectWidth } from "../selectWidth";
+import { Contact } from "../types";
+import { ContactFilter, LabelColors, matchesFilter, isFavorite, contactLabels, initials } from "../contactUtils";
 
 interface Props {
   contacts: Contact[];
-  addressBooks: AddressBook[];
+  filter: ContactFilter;
+  labelColors: LabelColors;
   selectedContactId: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
-  bookFilter: string;
-  onSetBookFilter: (id: string) => void;
+  onToggleFavorite: (c: Contact) => void;
 }
 
 /** First value out of a JSON-text typed-value column ([{type,value}, ...]). */
@@ -20,20 +20,17 @@ function firstValue(json: string): string {
   } catch { return ""; }
 }
 
-export default function ContactsView({ contacts, addressBooks, selectedContactId, onSelect, onCreate, bookFilter, onSetBookFilter }: Props) {
-  const [search, setSearch] = useState("");
-  const [labelFilter, setLabelFilter] = useState("all");
+const avatarStyle = {
+  width: 30, height: 30, borderRadius: "50%", background: "#34353a", color: "#c8c8c8",
+  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600,
+  flexShrink: 0, marginTop: 1
+} as const;
 
-  const allLabels = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of contacts) c.categories.split(",").map((s) => s.trim()).filter(Boolean).forEach((l) => set.add(l));
-    return [...set].sort((a, b) => a.localeCompare(b));
-  }, [contacts]);
+export default function ContactsView({ contacts, filter, labelColors, selectedContactId, onSelect, onCreate, onToggleFavorite }: Props) {
+  const [search, setSearch] = useState("");
 
   const visible = useMemo(() => {
-    let base = contacts;
-    if (bookFilter !== "all") base = base.filter((c) => c.address_book_id === bookFilter);
-    if (labelFilter !== "all") base = base.filter((c) => c.categories.split(",").map((s) => s.trim()).includes(labelFilter));
+    let base = contacts.filter((c) => !c.deleted && matchesFilter(c, filter));
     const q = search.trim().toLowerCase();
     if (q) {
       base = base.filter((c) =>
@@ -48,9 +45,7 @@ export default function ContactsView({ contacts, addressBooks, selectedContactId
       );
     }
     return [...base].sort((a, b) => (a.fn || "").localeCompare(b.fn || ""));
-  }, [contacts, bookFilter, labelFilter, search]);
-
-  const bookName = bookFilter === "all" ? "All" : addressBooks.find((b) => b.id === bookFilter)?.name ?? "All";
+  }, [contacts, filter, search]);
 
   return (
     <>
@@ -58,53 +53,47 @@ export default function ContactsView({ contacts, addressBooks, selectedContactId
         <h2>Contacts</h2>
         <input
           className="search-box"
-          placeholder="Search contacts"
+          placeholder="Search name, nickname, phone, email…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
         <button className="primary" onClick={onCreate}>+ New contact</button>
       </div>
-      <div className="toolbar-filters">
-        <select
-          className="due-filter-select"
-          value={bookFilter}
-          style={{ width: selectWidth(`Book: ${bookName}`) }}
-          onChange={(e) => onSetBookFilter(e.target.value)}
-        >
-          <option value="all">Book: All</option>
-          {addressBooks.map((b) => <option key={b.id} value={b.id}>Book: {b.name}</option>)}
-        </select>
-        {allLabels.length > 0 && (
-          <select
-            className="due-filter-select"
-            value={labelFilter}
-            style={{ width: selectWidth(labelFilter === "all" ? "Label: All" : `Label: ${labelFilter}`) }}
-            onChange={(e) => setLabelFilter(e.target.value)}
-          >
-            <option value="all">Label: All</option>
-            {allLabels.map((l) => <option key={l} value={l}>Label: {l}</option>)}
-          </select>
-        )}
-        <div className="toolbar-filters-right">
-          <span style={{ fontSize: 12, color: "#8a8d93" }}>{visible.length} contact{visible.length === 1 ? "" : "s"}</span>
-        </div>
-      </div>
       <div className="task-table">
         {visible.length === 0 ? (
-          <div className="empty-state">No contacts yet. Click “+ New contact” to add one.</div>
+          <div className="empty-state">No contacts here yet.</div>
         ) : (
           visible.map((c) => {
             const sub = c.org || firstValue(c.emails) || firstValue(c.phones);
+            const labels = contactLabels(c);
+            const fav = isFavorite(c);
             return (
               <div
                 key={c.id}
                 className={`task-row ${c.id === selectedContactId ? "selected" : ""}`}
                 onClick={() => onSelect(c.id)}
               >
+                <div style={avatarStyle}>{initials(c)}</div>
                 <div className="title-col">
                   <div className="title">{c.fn || "Unnamed"}</div>
                   {sub && <div className="meta">{sub}</div>}
+                  {labels.length > 0 && (
+                    <div className="meta" style={{ gap: 5 }}>
+                      {labels.slice(0, 5).map((l) => (
+                        <span
+                          key={l}
+                          title={l}
+                          style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: labelColors[l] || "#6f7378" }}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
+                <button
+                  title={fav ? "Remove favorite" : "Add favorite"}
+                  onClick={(e) => { e.stopPropagation(); onToggleFavorite(c); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: fav ? "#e8a23d" : "#5b5c61", fontSize: 16, alignSelf: "center", padding: "0 2px" }}
+                >{fav ? "★" : "☆"}</button>
               </div>
             );
           })
