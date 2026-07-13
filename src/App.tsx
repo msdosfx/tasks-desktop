@@ -7,6 +7,7 @@ import SettingsModal from "./components/SettingsModal";
 import AboutModal from "./components/AboutModal";
 import CalendarView, { CalendarShow } from "./components/CalendarView";
 import TodayPane from "./components/TodayPane";
+import ContactsRail from "./components/ContactsRail";
 import EventDetailPanel from "./components/EventDetailPanel";
 import ContactsView from "./components/ContactsView";
 import ContactsSidebar from "./components/ContactsSidebar";
@@ -836,15 +837,24 @@ export default function App() {
       </div>
 
       <div className="right-rail">
-        <TodayPane
-          tasks={tasks}
-          events={events}
-          lists={lists}
-          onSelectTask={selectTask}
-          onSelectEvent={selectEvent}
-          collapsed={railCollapsed}
-          onToggleCollapsed={() => setRailCollapsed(!railCollapsed)}
-        />
+        {mainView === "contacts" ? (
+          <ContactsRail
+            contacts={contacts}
+            onSelectContact={selectContact}
+            collapsed={railCollapsed}
+            onToggleCollapsed={() => setRailCollapsed(!railCollapsed)}
+          />
+        ) : (
+          <TodayPane
+            tasks={tasks}
+            events={events}
+            lists={lists}
+            onSelectTask={selectTask}
+            onSelectEvent={selectEvent}
+            collapsed={railCollapsed}
+            onToggleCollapsed={() => setRailCollapsed(!railCollapsed)}
+          />
+        )}
         {!railCollapsed && (selectedContactId ? (
           <ContactDetailPanel
             contact={contacts.find((c) => c.id === selectedContactId) || null}
