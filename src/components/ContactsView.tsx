@@ -22,14 +22,25 @@ function firstValue(json: string): string {
 
 export default function ContactsView({ contacts, addressBooks, selectedContactId, onSelect, onCreate, bookFilter, onSetBookFilter }: Props) {
   const [search, setSearch] = useState("");
+  const [labelFilter, setLabelFilter] = useState("all");
+
+  const allLabels = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of contacts) c.categories.split(",").map((s) => s.trim()).filter(Boolean).forEach((l) => set.add(l));
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [contacts]);
 
   const visible = useMemo(() => {
     let base = contacts;
     if (bookFilter !== "all") base = base.filter((c) => c.address_book_id === bookFilter);
+    if (labelFilter !== "all") base = base.filter((c) => c.categories.split(",").map((s) => s.trim()).includes(labelFilter));
     const q = search.trim().toLowerCase();
     if (q) {
       base = base.filter((c) =>
         c.fn.toLowerCase().includes(q) ||
+        c.first_name.toLowerCase().includes(q) ||
+        c.last_name.toLowerCase().includes(q) ||
+        c.nickname.toLowerCase().includes(q) ||
         c.org.toLowerCase().includes(q) ||
         c.emails.toLowerCase().includes(q) ||
         c.phones.toLowerCase().includes(q) ||
@@ -37,7 +48,7 @@ export default function ContactsView({ contacts, addressBooks, selectedContactId
       );
     }
     return [...base].sort((a, b) => (a.fn || "").localeCompare(b.fn || ""));
-  }, [contacts, bookFilter, search]);
+  }, [contacts, bookFilter, labelFilter, search]);
 
   const bookName = bookFilter === "all" ? "All" : addressBooks.find((b) => b.id === bookFilter)?.name ?? "All";
 
@@ -63,6 +74,17 @@ export default function ContactsView({ contacts, addressBooks, selectedContactId
           <option value="all">Book: All</option>
           {addressBooks.map((b) => <option key={b.id} value={b.id}>Book: {b.name}</option>)}
         </select>
+        {allLabels.length > 0 && (
+          <select
+            className="due-filter-select"
+            value={labelFilter}
+            style={{ width: selectWidth(labelFilter === "all" ? "Label: All" : `Label: ${labelFilter}`) }}
+            onChange={(e) => setLabelFilter(e.target.value)}
+          >
+            <option value="all">Label: All</option>
+            {allLabels.map((l) => <option key={l} value={l}>Label: {l}</option>)}
+          </select>
+        )}
         <div className="toolbar-filters-right">
           <span style={{ fontSize: 12, color: "#8a8d93" }}>{visible.length} contact{visible.length === 1 ? "" : "s"}</span>
         </div>

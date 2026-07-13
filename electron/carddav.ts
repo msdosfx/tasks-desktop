@@ -27,7 +27,9 @@ function samePath(a: string, b: string): boolean {
 
 async function clientFor(account: CaldavAccount): Promise<Client> {
   return createDAVClient({
-    serverUrl: account.server_url,
+    // CardDAV lives at a different address than CalDAV on some servers (e.g.
+    // Synology), so prefer the account's dedicated carddav_url when set.
+    serverUrl: account.carddav_url || account.server_url,
     credentials: {
       username: account.username,
       password: decryptPassword(account.password_enc)

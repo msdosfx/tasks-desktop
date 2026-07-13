@@ -178,6 +178,29 @@ deliver the visible value, 5–6 are additive.
 
 ---
 
+## 6.5. Phase 3 UI refinements (user notes 2026-07-12)
+
+Make the Contacts view a proper contacts workspace, laid out like Thunderbird /
+Synology Contacts:
+1. **Left column shows address books** when the Contacts tab is active (context-
+   aware sidebar — address books instead of task lists/calendars), clicking one
+   filters the list to that book. This replaces the toolbar Book dropdown.
+2. **"CalDAV accounts" → "CardDAV accounts"** labeling in the Contacts context;
+   the account/settings affordance surfaces CardDAV linking there.
+3. **Today pane shows groups/labels** (distinct `CATEGORIES` across contacts)
+   when in Contacts view; clicking a label filters the list. *(Done separately:
+   a label filter dropdown also lives in the main toolbar.)*
+4. **Label filter in the main panel toolbar** — DONE.
+5. **Search matches** first name, last name, nickname, phone numbers, email
+   addresses (plus display name, org, labels) — DONE.
+
+Also done 2026-07-12: separate **`carddav_url`** on the account (Synology hosts
+CardDAV at a different address than CalDAV) — schema + `carddav.ts` client +
+renderer type; the account-settings CardDAV section (phase 3b) collects it.
+
+Still to build: context-aware sidebar (address books), Today-pane labels,
+CardDAV account/link UI in Settings.
+
 ## 6. Decisions (resolved 2026-07-12)
 
 1. **Birthdays** (DECIDED — materialize real events): `BDAY` stays a normal

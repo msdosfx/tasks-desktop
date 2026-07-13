@@ -67,6 +67,7 @@ export interface CaldavAccountPublic {
   id: string;
   label: string;
   server_url: string;
+  carddav_url: string | null;
   username: string;
   principal_url: string | null;
   last_sync_at: string | null;

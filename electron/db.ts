@@ -87,6 +87,9 @@ export interface CaldavAccount {
   id: string;
   label: string;
   server_url: string;
+  /** CardDAV base URL -- separate from server_url because some servers (e.g.
+   *  Synology) host CardDAV at a different address than CalDAV. Null until set. */
+  carddav_url: string | null;
   username: string;
   password_enc: string; // base64 of safeStorage-encrypted bytes, or plain if encryption unavailable
   principal_url: string | null;
@@ -226,6 +229,7 @@ function migrate(db: DatabaseSync) {
       id TEXT PRIMARY KEY,
       label TEXT NOT NULL,
       server_url TEXT NOT NULL,
+      carddav_url TEXT,
       username TEXT NOT NULL,
       password_enc TEXT NOT NULL,
       principal_url TEXT,
@@ -310,6 +314,7 @@ function migrate(db: DatabaseSync) {
   try { db.exec(`ALTER TABLE events ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE events ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE tasks ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
+  try { db.exec(`ALTER TABLE caldav_accounts ADD COLUMN carddav_url TEXT`); } catch { /* already present */ }
   try { db.exec(`ALTER TABLE events ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0`); } catch { /* already present */ }
 
   // One-time (idempotent -- safe to run every launch) backfill: reminders used
@@ -788,10 +793,11 @@ export function accountUpdate(id: string, patch: Partial<CaldavAccount>): Caldav
   const current = db.prepare(`SELECT * FROM caldav_accounts WHERE id = ?`).get(id) as unknown as CaldavAccount;
   const merged = { ...current, ...patch };
   db.prepare(
-    `UPDATE caldav_accounts SET label=?, server_url=?, username=?, password_enc=?, principal_url=?, last_sync_at=?, last_sync_status=? WHERE id=?`
+    `UPDATE caldav_accounts SET label=?, server_url=?, carddav_url=?, username=?, password_enc=?, principal_url=?, last_sync_at=?, last_sync_status=? WHERE id=?`
   ).run(
     merged.label,
     merged.server_url,
+    merged.carddav_url,
     merged.username,
     merged.password_enc,
     merged.principal_url,
