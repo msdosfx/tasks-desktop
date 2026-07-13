@@ -1,26 +1,31 @@
 import React, { useEffect, useState } from "react";
-import { CaldavAccountPublic, DiscoveredCalendar, TaskList } from "../types";
+import { CaldavAccountPublic, DiscoveredCalendar, DiscoveredAddressBook, AddressBook, TaskList } from "../types";
 
 interface Props {
   lists: TaskList[];
+  addressBooks: AddressBook[];
   onClose: () => void;
   onListsChanged: () => void;
   onSyncAccount: (accountId: string) => Promise<{ listId: string; pulled: number; pushed: number; errors: string[] }[]>;
 }
 
-export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAccount }: Props) {
+export default function SettingsModal({ lists, addressBooks, onClose, onListsChanged, onSyncAccount }: Props) {
   const [accounts, setAccounts] = useState<CaldavAccountPublic[]>([]);
   const [label, setLabel] = useState("");
   const [serverUrl, setServerUrl] = useState("");
+  const [draftCarddavUrl, setDraftCarddavUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [testMsg, setTestMsg] = useState<string | null>(null);
   const [calendarsByAccount, setCalendarsByAccount] = useState<Record<string, DiscoveredCalendar[]>>({});
+  const [carddavUrlByAccount, setCarddavUrlByAccount] = useState<Record<string, string>>({});
+  const [addressBooksByAccount, setAddressBooksByAccount] = useState<Record<string, DiscoveredAddressBook[]>>({});
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   // Pending (unsaved) dropdown selections, keyed by calendar URL. Nothing here
   // takes effect until the single "Save changes" button is clicked.
   const [pendingByCal, setPendingByCal] = useState<Record<string, string>>({});
+  const [pendingByBook, setPendingByBook] = useState<Record<string, string>>({});
   const [advancedLinking, setAdvancedLinking] = useState(() => localStorage.getItem("advancedListLinking") === "1");
   const [version, setVersion] = useState<string>("");
   const [update, setUpdate] = useState<{ state: string; detail?: any } | null>(null);
@@ -46,6 +51,29 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
   }
   useEffect(() => { refresh(); }, []);
 
+  // Auto-list calendars and address books for each account when Settings opens
+  // (and when the account set changes), so they show up without a manual
+  // "Find…" click -- just pick "Connected" and Save changes.
+  const accountIds = accounts.map((a) => a.id).join(",");
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const acc of accounts) {
+        try {
+          const cals = await window.api.accounts.discoverCalendars(acc.id);
+          if (!cancelled) setCalendarsByAccount((p) => ({ ...p, [acc.id]: cals }));
+        } catch { /* server unreachable / not configured -- ignore */ }
+        if (acc.carddav_url) {
+          try {
+            const found = (await window.api.addressbooks?.discover(acc.id)) ?? [];
+            if (!cancelled) setAddressBooksByAccount((p) => ({ ...p, [acc.id]: found }));
+          } catch { /* ignore */ }
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [accountIds]);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -67,7 +95,8 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
         return;
       }
       const created = await window.api.accounts.create({ label: label || serverUrl, server_url: serverUrl, username, password });
-      setLabel(""); setServerUrl(""); setUsername(""); setPassword("");
+      if (draftCarddavUrl) await window.api.accounts.update(created.id, { carddav_url: draftCarddavUrl });
+      setLabel(""); setServerUrl(""); setUsername(""); setPassword(""); setDraftCarddavUrl("");
       await refresh();
       await discover(created.id);
     } catch (err: any) {
@@ -89,7 +118,7 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
         setTestMsg("Permission to contact that server was denied.");
         return;
       }
-      const res = await window.api.accounts.testConnection({ server_url: serverUrl, username, password });
+      const res = await window.api.accounts.testConnection({ server_url: serverUrl, carddav_url: draftCarddavUrl || undefined, username, password });
       setTestMsg(res.message);
     } catch (err: any) {
       setTestMsg(err?.message || String(err));
@@ -108,6 +137,41 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
       }
       const cals = await window.api.accounts.discoverCalendars(accountId);
       setCalendarsByAccount((prev) => ({ ...prev, [accountId]: cals }));
+    } catch (err: any) {
+      setTestMsg(err?.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function discoverBooks(accountId: string) {
+    setBusy(true);
+    setTestMsg(null);
+    try {
+      const url = carddavUrlByAccount[accountId] ?? (accounts.find((a) => a.id === accountId)?.carddav_url || "");
+      // Persist the CardDAV URL first -- discovery reads it off the account.
+      await window.api.accounts.update(accountId, { carddav_url: url });
+      await refresh();
+      const books = (await window.api.addressbooks?.discover(accountId)) ?? [];
+      setAddressBooksByAccount((prev) => ({ ...prev, [accountId]: books }));
+      if (books.length === 0) setTestMsg("No address books found at that CardDAV URL.");
+    } catch (err: any) {
+      setTestMsg(err?.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function linkBook(accountId: string, book: DiscoveredAddressBook) {
+    setBusy(true);
+    setTestMsg(null);
+    try {
+      const b = await window.api.addressbooks?.create(book.displayName);
+      if (b) await window.api.addressbooks?.link(b.id, accountId, book.url);
+      onListsChanged(); // reloads address books + contacts in App
+      const res = await onSyncAccount(accountId);
+      const errs = res.flatMap((r) => r.errors);
+      setTestMsg(errs.length ? `Linked with errors: ${errs[0]}` : `Linked "${book.displayName}" and synced.`);
     } catch (err: any) {
       setTestMsg(err?.message || String(err));
     } finally {
@@ -135,7 +199,8 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
    *  this is called — closing the modal beforehand discards pending choices. */
   async function saveAllChanges() {
     const entries = Object.entries(pendingByCal);
-    if (entries.length === 0) return;
+    const bookEntries = Object.entries(pendingByBook);
+    if (entries.length === 0 && bookEntries.length === 0) return;
     setBusy(true);
     setTestMsg(null);
     const accountsToSync = new Set<string>();
@@ -171,6 +236,30 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
           errors.push(`${cal.displayName}: ${err?.message || err}`);
         }
       }
+      for (const [bookUrl, selected] of bookEntries) {
+        let accountId: string | undefined;
+        let book: DiscoveredAddressBook | undefined;
+        for (const [accId, books] of Object.entries(addressBooksByAccount)) {
+          const found = books.find((b) => b.url === bookUrl);
+          if (found) { accountId = accId; book = found; break; }
+        }
+        if (!accountId || !book) continue;
+        const linkedBook = addressBooks.find((ab) => ab.carddav_addressbook_url === bookUrl);
+        try {
+          if (selected === "__new__") {
+            const b = await window.api.addressbooks?.create(book.displayName);
+            if (b) await window.api.addressbooks?.link(b.id, accountId, bookUrl);
+            accountsToSync.add(accountId);
+          } else if (selected === "") {
+            if (linkedBook) {
+              await window.api.addressbooks?.unlink(linkedBook.id);
+              await window.api.addressbooks?.delete(linkedBook.id);
+            }
+          }
+        } catch (err: any) {
+          errors.push(`${book.displayName}: ${err?.message || err}`);
+        }
+      }
     } finally {
       // The link/unlink/create calls above are already committed to the database
       // at this point (each has its own try/catch, so one failure doesn't stop
@@ -180,6 +269,7 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
       // with no way to clear it, even though the actual link already succeeded.
       onListsChanged();
       setPendingByCal({});
+      setPendingByBook({});
     }
 
     try {
@@ -230,7 +320,7 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
     <div className="overlay">
       <div className="settings-modal" style={{ position: "relative" }}>
         <button className="modal-close" onClick={onClose}>×</button>
-        <h2>CalDAV accounts</h2>
+        <h2>CalDAV / CardDAV accounts</h2>
         <p style={{ color: "#9aa0a6", fontSize: 12 }}>
           Connect a CalDAV server (Nextcloud, Tasks.org sync provider, DAVx5-compatible server, etc.) to sync tasks
           with your existing Tasks.org setup.
@@ -302,30 +392,99 @@ export default function SettingsModal({ lists, onClose, onListsChanged, onSyncAc
                 </div>
               );
             })}
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #2c2d30" }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#9aa0a6", marginBottom: 6 }}>Contacts (CardDAV)</div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  style={{ flex: 1, background: "#26272a", border: "1px solid #34353a", borderRadius: 6, color: "#e6e6e6", padding: "5px 8px", fontSize: 12 }}
+                  placeholder="CardDAV URL (e.g. http://host:5000/carddav.php/…)"
+                  value={carddavUrlByAccount[acc.id] ?? (acc.carddav_url || "")}
+                  onChange={(e) => setCarddavUrlByAccount((prev) => ({ ...prev, [acc.id]: e.target.value }))}
+                />
+                <button onClick={() => discoverBooks(acc.id)} disabled={busy}>Find address books</button>
+              </div>
+              {addressBooksByAccount[acc.id]?.map((book) => {
+                const linkedBook = addressBooks.find((ab) => ab.carddav_addressbook_url === book.url);
+                const current = linkedBook?.id ?? "";
+                const isConnected = current !== "";
+                const pending = pendingByBook[book.url];
+                const selected = pending ?? current;
+                const dirty = pending !== undefined;
+                return (
+                  <div className="calendar-pick" key={book.url}>
+                    <span>{book.displayName}</span>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      {dirty && <span style={{ fontSize: 11, color: "#e8a23d" }}>Unsaved</span>}
+                      <select
+                        value={selected}
+                        disabled={busy}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setPendingByBook((prev) => {
+                            const next = { ...prev };
+                            if (val === current) delete next[book.url];
+                            else next[book.url] = val;
+                            return next;
+                          });
+                        }}
+                      >
+                        {isConnected ? (
+                          <>
+                            <option value={current} disabled>Connected</option>
+                            <option value="">Not linked</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="">Not linked</option>
+                            <option value="__new__">Connected</option>
+                          </>
+                        )}
+                      </select>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         ))}
 
-        {accounts.length > 0 && (
-          <div className="settings-save-bar">
-            {Object.keys(pendingByCal).length > 0 && (
-              <span style={{ fontSize: 12, color: "#9aa0a6" }}>
-                {Object.keys(pendingByCal).length} unsaved change{Object.keys(pendingByCal).length === 1 ? "" : "s"}
-              </span>
-            )}
-            <button
-              className="primary"
-              disabled={busy || Object.keys(pendingByCal).length === 0}
-              onClick={saveAllChanges}
-            >
-              Save changes
-            </button>
-          </div>
-        )}
+        {accounts.length > 0 && (() => {
+          const pendingCount = Object.keys(pendingByCal).length + Object.keys(pendingByBook).length;
+          return (
+            <div className="settings-save-bar">
+              {pendingCount > 0 && (
+                <span style={{ fontSize: 12, color: "#9aa0a6" }}>
+                  {pendingCount} unsaved change{pendingCount === 1 ? "" : "s"}
+                </span>
+              )}
+              <button
+                className="primary"
+                disabled={busy || pendingCount === 0}
+                onClick={saveAllChanges}
+              >
+                Save changes
+              </button>
+            </div>
+          );
+        })()}
+
+        <label
+          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#9aa0a6", marginTop: 12 }}
+          title="Enable if your server uses a self-signed certificate (e.g. Synology DSM over HTTPS on your LAN). Turns off certificate verification for the app's sync connections — only use on servers you trust."
+        >
+          <input
+            type="checkbox"
+            checked={prefs.allowInsecureCerts === "1"}
+            onChange={(e) => setPref("allowInsecureCerts", e.target.checked ? "1" : "0")}
+          />
+          Allow self-signed certificates (self-hosted servers on your LAN)
+        </label>
 
         <h3 style={{ marginTop: 18 }}>Add account</h3>
         <div className="form-grid">
           <input placeholder="Label (e.g. My Nextcloud)" value={label} onChange={(e) => setLabel(e.target.value)} />
-          <input placeholder="Server URL (https://...)" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
+          <input placeholder="Server URL — CalDAV (https://…/caldav.php/)" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
+          <input placeholder="CardDAV URL — contacts (optional)" value={draftCarddavUrl} onChange={(e) => setDraftCarddavUrl(e.target.value)} />
           <input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
           <div className="password-field">
             <input

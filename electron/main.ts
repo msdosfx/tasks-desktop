@@ -59,11 +59,22 @@ const SETTING_DEFAULTS: Record<string, string> = {
   closeToTray: "0", // off by default: the X button really quits; opt in via settings
   launchAtLogin: "0",
   syncIntervalMinutes: "60", // background auto-sync; matches Tasks.org's default; "0" = manual only
-  syncHotkey: "CmdOrCtrl+R" // accelerator for Sync Now; "" = no hotkey
+  syncHotkey: "CmdOrCtrl+R", // accelerator for Sync Now; "" = no hotkey
+  allowInsecureCerts: "0" // opt-in: accept self-signed TLS certs (self-hosted LAN servers)
 };
 
 function getSetting(key: string): string {
   return settingsAll()[key] ?? SETTING_DEFAULTS[key] ?? "";
+}
+
+/** Opt-in acceptance of self-signed certificates for self-hosted servers on the
+ *  LAN (e.g. Synology DSM's default HTTPS cert on :5001). Off by default; when
+ *  on it turns off TLS verification for the app's Node fetches (undici honors
+ *  NODE_TLS_REJECT_UNAUTHORIZED via tls.connect), so it's clearly labeled in
+ *  Settings. Applied at startup and whenever the toggle changes. */
+function applyTlsSetting() {
+  if (getSetting("allowInsecureCerts") === "1") process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  else delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
 }
 
 function showMainWindow() {
@@ -86,6 +97,23 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false
     }
+  });
+
+  // Right-click Cut/Copy/Paste on inputs (and Copy on any selected text).
+  mainWindow.webContents.on("context-menu", (_e, params) => {
+    const template: Electron.MenuItemConstructorOptions[] = [];
+    if (params.isEditable) {
+      template.push(
+        { role: "cut", enabled: params.editFlags.canCut },
+        { role: "copy", enabled: params.editFlags.canCopy },
+        { role: "paste", enabled: params.editFlags.canPaste },
+        { type: "separator" },
+        { role: "selectAll" }
+      );
+    } else if (params.selectionText && params.selectionText.trim()) {
+      template.push({ role: "copy" }, { type: "separator" }, { role: "selectAll" });
+    }
+    if (template.length && mainWindow) Menu.buildFromTemplate(template).popup({ window: mainWindow });
   });
 
   if (isDev) {
@@ -309,6 +337,7 @@ function registerIpc() {
     settingSet(key, value);
     if (key === "launchAtLogin") applyLaunchAtLogin(value === "1");
     if (key === "syncHotkey") buildMenu(); // apply new accelerator immediately
+    if (key === "allowInsecureCerts") applyTlsSetting();
   });
 
   ipcMain.handle("lists:all", () => listsAll());
@@ -372,7 +401,17 @@ function registerIpc() {
   ipcMain.handle("accounts:delete", (_e, id: string) => accountDelete(id));
   ipcMain.handle("accounts:testConnection", async (_e, account: any) => {
     const full = accountsAll().find((a) => a.id === account.id) || { ...account, password_enc: encryptPassword(account.password || "") };
-    return testConnection(full as any);
+    const cal = await testConnection(full as any);
+    // Also probe CardDAV address books -- uses carddav_url, else falls back to
+    // server_url in clientFor -- so testing a draft (before the account is
+    // saved) already reports address books if the URL is a contacts endpoint.
+    // Silent on failure (a plain CalDAV URL just isn't a CardDAV collection).
+    let books = "";
+    try {
+      const found = await discoverAddressBooks(full as any);
+      if (found.length > 0) books = ` Found ${found.length} address book(s).`;
+    } catch { /* not a CardDAV endpoint / unreachable — omit */ }
+    return { ok: cal.ok, message: cal.message + books };
   });
   ipcMain.handle("accounts:discoverCalendars", async (_e, accountId: string) => {
     const account = accountsAll().find((a) => a.id === accountId);
@@ -420,6 +459,7 @@ app.whenReady().then(() => {
   setupTray();
   setupAutoUpdater();
   applyLaunchAtLogin(getSetting("launchAtLogin") === "1");
+  applyTlsSetting();
 
   // First reminder pass shortly after launch (catches anything that came due
   // while the app was off), then once a minute.

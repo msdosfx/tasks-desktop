@@ -1,5 +1,51 @@
 # Notes for next session
 
+## 2026-07-12 (evening) — Contacts phase 3 UI + CardDAV linking (BUILT, NOT YET BUILD-TESTED)
+
+On branch `contacts`. A large batch of renderer work was written but **not built or
+tested on Windows yet** (Cowork can't run the vite build; electron `tsc` for the
+`carddav_url` backend also wasn't re-run). First thing: `npm run build`, fix any TS
+errors, then `npm run dev` + `npm run dev:electron` and test the checklist below.
+
+**What was built (all on the Contacts tab):**
+- **Contacts-aware sidebar** (`src/components/ContactsSidebar.tsx`) — replaces the
+  task-list sidebar when on Contacts: All contacts / ★ Favorites / Address books
+  ("+ New address book") / Labels. Right-click a label → set color (palette).
+  Footer "CardDAV accounts…". Single active collection drives the list.
+- **`ContactsView`** reworked — toolbar is just search + New contact (no dropdowns);
+  rows show initials avatar + star (favorite) + colored label dots.
+- **Favorites** = reserved `CATEGORIES` value "Favorite" (`src/contactUtils.ts`),
+  so it's the ★ Favorites collection AND syncs. Star toggle on each row.
+- **Label colors** stored as a settings-JSON map under key `contactLabelColors`
+  (no new table); dots on sidebar + rows.
+- **Upcoming rail** (`src/components/ContactsRail.tsx`) — right pane shows next **8**
+  birthdays + anniversaries (🎂/💍), date, "turns N", days-until; click opens contact;
+  shows all contacts regardless of the sidebar filter.
+- **Year-less birthdays** — "no year" checkbox in `ContactDetailPanel`; stored as
+  `--MM-DD`; the rail parses it and shows no age.
+- **CardDAV linking (3b)** — `SettingsModal` gained a "Contacts (CardDAV)" section per
+  account: a CardDAV URL field (Synology's is a DIFFERENT address than CalDAV, e.g.
+  `.../carddav.php/…`), "Find address books", and per-book Link. Backend already had
+  `carddav_url` on the account + `carddav.ts` using it + the `addressbooks:*` IPC.
+
+**Test checklist:**
+1. Contacts tab renders; create/edit/delete a contact; star some (→ ★ Favorites).
+2. Add a category → shows under Labels; right-click → color sticks (persists across
+   restart via settings).
+3. Search matches first/last/nickname/phone/email.
+4. Set a birthday with a year and one with "no year"; both appear in the rail with
+   correct days-until; the year one shows "turns N".
+5. Settings → your account → Contacts (CardDAV): paste Synology's CardDAV URL →
+   Find address books → Link one → confirm real contacts sync in, and edits push back.
+
+**Known rough edges to polish:** detail panel's Categories field shows "Favorite"
+when starred (hide the reserved marker); no anniversary editor in the panel yet
+(rail shows synced anniversaries only); no star in the detail panel (row star only);
+label color picker is a context-menu list, not swatches; no unlink/delete-address-book
+UI yet. `KIND:group` real groups still needed for Apple cross-compat (see contacts-plan.md).
+
+Commit when green: `git add electron/ src/ docs/ && git commit -m "contacts: phase 3 UI (sidebar/rail/favorites/label-colors) + CardDAV linking"`
+
 ## 2026-07-12 — packaged .exe shows the Electron logo, not the green app icon
 User reports the installed Windows .exe (from a GitHub release) displays the default Electron
 logo instead of the app's green icon. Likely one or more of:

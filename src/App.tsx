@@ -907,8 +907,9 @@ export default function App() {
       {showSettings && (
         <SettingsModal
           lists={lists}
+          addressBooks={addressBooks}
           onClose={() => setShowSettings(false)}
-          onListsChanged={() => { loadLists(); loadTasks(); loadAccounts(); }}
+          onListsChanged={() => { loadLists(); loadTasks(); loadAccounts(); loadAddressBooks(); loadContacts(); }}
           onSyncAccount={syncAccountNow}
         />
       )}

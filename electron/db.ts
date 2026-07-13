@@ -811,6 +811,7 @@ export function accountUpdate(id: string, patch: Partial<CaldavAccount>): Caldav
 export function accountDelete(id: string) {
   const db = getDb();
   db.prepare(`UPDATE lists SET caldav_account_id = NULL, caldav_calendar_url = NULL, caldav_ctag = NULL WHERE caldav_account_id = ?`).run(id);
+  db.prepare(`UPDATE address_books SET carddav_account_id = NULL, carddav_addressbook_url = NULL, carddav_ctag = NULL WHERE carddav_account_id = ?`).run(id);
   db.prepare(`DELETE FROM caldav_accounts WHERE id = ?`).run(id);
 }
 

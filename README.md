@@ -72,6 +72,70 @@ first launch will be blocked by Gatekeeper — right-click (or Ctrl-click) the a
 choose **Open**, then confirm. This is only needed once. Update by installing a newer .dmg over the old
 copy; remove by deleting the app from Applications.
 
+## Connecting a CalDAV / CardDAV server (Synology, Nextcloud, …)
+
+Tasks Desktop syncs **tasks & calendars over CalDAV** and **contacts over CardDAV**. Open **Settings**
+(the "CalDAV / CardDAV accounts…" button in the sidebar) → **Add account** and fill in:
+
+- **Server URL — CalDAV** — the calendars/tasks endpoint.
+- **CardDAV URL — contacts** (optional) — the contacts endpoint. On some servers this is a *different*
+  address than CalDAV (notably Synology); on others (Nextcloud) it's the same base URL.
+- **Username** and **Password / app token**.
+
+Click **Test connection** — it reports how many calendars **and** address books it found, so you can
+confirm the URLs before saving. After saving, use the account's **Find calendars** to link lists, and the
+**Contacts (CardDAV)** section to **Find address books** and link them.
+
+> **Self-hosted server over HTTPS?** NAS boxes (Synology, etc.) usually use a **self-signed
+> certificate**, which the app rejects by default. If HTTPS gives "fetch failed" but HTTP works, tick
+> **Allow self-signed certificates** in Settings — only do this for servers you trust on your own network.
+
+### Synology — Calendar and Contacts URLs live in different places
+
+Synology serves CalDAV and CardDAV as **separate services at different addresses**, so enter both.
+
+- **CalDAV (Calendar):** open the **Synology Calendar** app → **Settings** (gear, top-right) → **CalDAV
+  Account**. The URL looks like:
+
+  ```
+  http://<nas-ip>:5000/caldav.php/          # or https://<nas-ip>:5001/caldav.php/ over HTTPS
+  ```
+
+- **CardDAV (Contacts):** the contacts service is separate and, by default, listens only on the loopback
+  address (port 5555). Give it a reachable HTTPS port first:
+  **Control Panel → System → Login Portal → Applications → Synology Contacts → set an HTTPS port**
+  (e.g. your DSM HTTPS port, 5001). Then the CardDAV base URL is:
+
+  ```
+  https://<nas-ip>:<https-port>/carddav/    # e.g. https://192.168.50.3:5001/carddav/
+  ```
+
+- DSM's HTTPS cert is self-signed, so enable **Allow self-signed certificates** (see the note above).
+
+### Nextcloud — one base URL for both
+
+Nextcloud auto-discovers calendars **and** contacts from a single DAV base, so put the **same URL** in
+both the Server URL and CardDAV URL fields:
+
+```
+https://<your-nextcloud-host>/remote.php/dav/
+```
+
+(In-app you can also copy the exact addresses: **Calendar → Settings, bottom-left → "Copy primary CalDAV
+address"**; contacts live under `/remote.php/dav/addressbooks/users/<user>/`.)
+
+### Other servers
+
+Most CalDAV/CardDAV servers auto-discover from a base URL — paste that and the app finds the collections:
+
+- **Baïkal:** `https://<host>/dav.php/` (discovers both calendars and address books).
+- **Radicale:** `http://<host>:5232/` (or `http://<host>:5232/<user>/`).
+- **Generic / DAVx5-compatible:** if a single base URL doesn't discover everything, enter the specific
+  collection URLs — `.../calendars/<user>/` for CalDAV and `.../addressbooks/<user>/` for CardDAV.
+
+Notes: usernames with spaces can break discovery on some servers — avoid them if possible. Synology
+doesn't support two-factor auth for third-party CalDAV/CardDAV clients; use your normal password.
+
 ## Stack
 - Electron (main process) + Node's built-in `node:sqlite` for local storage (no native compiler required)
 - React + TypeScript (renderer), built with Vite

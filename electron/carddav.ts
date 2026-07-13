@@ -46,13 +46,22 @@ export interface DiscoveredAddressBook {
 }
 
 export async function discoverAddressBooks(account: CaldavAccount): Promise<DiscoveredAddressBook[]> {
-  const client = await clientFor(account);
-  const books = await client.fetchAddressBooks();
-  return books.map((b) => ({
-    url: String(b.url),
-    displayName: String((b as any).displayName || b.url),
-    ctag: (b as any).ctag ?? null
-  }));
+  try {
+    const client = await clientFor(account);
+    const books = await client.fetchAddressBooks();
+    return books.map((b) => ({
+      url: String(b.url),
+      displayName: String((b as any).displayName || b.url),
+      ctag: (b as any).ctag ?? null
+    }));
+  } catch (err: any) {
+    // Node/undici wraps the real reason (TLS, ECONNREFUSED, 404, ...) in
+    // `err.cause`; surface it so "fetch failed" becomes diagnosable.
+    const cause = err?.cause?.message || err?.cause?.code || (err?.cause ? String(err.cause) : "");
+    syncLog(`carddav discover FAILED for ${account.carddav_url || account.server_url}: ${err?.message}${cause ? ` (cause: ${cause})` : ""}`);
+    console.error("carddav discover error:", err, "\ncause:", err?.cause);
+    throw new Error(cause ? `${err?.message || "discover failed"} — ${cause}` : (err?.message || String(err)));
+  }
 }
 
 /** Link a local address book to a discovered remote one (unlinking any other
