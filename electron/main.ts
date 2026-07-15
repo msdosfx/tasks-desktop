@@ -471,7 +471,10 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
-  if (process.platform === "win32") app.setAppUserModelId("com.arlis.tasksdesktop"); // required for toasts
+  // Distinct AppUserModelID in dev so a raw `electron .` run doesn't register a
+  // shortcut under the packaged app's identity — that collision is what made
+  // Windows show the Electron icon on the installed app's taskbar button.
+  if (process.platform === "win32") app.setAppUserModelId(isDev ? "com.arlis.tasksdesktop.dev" : "com.arlis.tasksdesktop"); // required for toasts
   registerIpc();
   buildMenu();
   createWindow();
