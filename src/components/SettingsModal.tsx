@@ -1,6 +1,26 @@
 import React, { useEffect, useState } from "react";
 import { CaldavAccountPublic, DiscoveredCalendar, DiscoveredAddressBook, AddressBook, TaskList } from "../types";
 
+/** Renderer-side twin of db.ts's davUrlKey: normalize a CalDAV/CardDAV URL so
+ *  http<->https, trailing-slash, default-port and host-casing differences don't
+ *  make the same remote collection look "not connected" (which is what led the
+ *  dropdown to default to "create new list" and spawn duplicates). Kept in sync
+ *  with electron/db.ts. */
+function davUrlKey(url: string | null | undefined): string {
+  if (!url) return "";
+  let s = String(url).trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "").replace(/:(80|443)(\/|$)/, "$2");
+  const slash = s.indexOf("/");
+  const host = (slash === -1 ? s : s.slice(0, slash)).toLowerCase();
+  return host + (slash === -1 ? "" : s.slice(slash));
+}
+function sameDavUrl(a: string | null | undefined, b: string | null | undefined): boolean {
+  return davUrlKey(a) === davUrlKey(b);
+}
+/** Tag a disconnected collection so it reads as distinct from the synced one. */
+function toLocalName(name: string): string {
+  return /\(local\)\s*$/i.test(name) ? name : `${name} (local)`;
+}
+
 interface Props {
   lists: TaskList[];
   addressBooks: AddressBook[];
@@ -214,19 +234,21 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
           if (found) { accountId = accId; cal = found; break; }
         }
         if (!accountId || !cal) continue;
-        const linkedList = lists.find((l) => l.caldav_calendar_url === calUrl);
+        const linkedList = lists.find((l) => sameDavUrl(l.caldav_calendar_url, calUrl));
         try {
           if (selected === "__new__") {
-            const newList = await window.api.lists.create(cal.displayName, cal.color ?? undefined);
-            await window.api.accounts.linkList(newList.id, accountId, calUrl);
+            // Idempotent: reuses an existing list for this calendar (matched by
+            // normalized URL) instead of creating a duplicate on reconnect.
+            await window.api.accounts.connectCalendar(accountId, calUrl, cal.displayName, cal.color ?? null);
             accountsToSync.add(accountId);
           } else if (selected === "") {
             if (linkedList) {
-              // Unlink first so no future sync touches the server, then remove the
-              // list (and its locally-synced tasks) from this app. The remote
-              // calendar and its items are untouched.
+              // Disconnect: unlink so no future sync touches the server, then
+              // KEEP the list and its tasks but rename it "(local)" so it's
+              // clearly distinct from the synced copy. The remote calendar is
+              // untouched. (Was: delete the list entirely.)
               await window.api.accounts.unlinkList(linkedList.id);
-              await window.api.lists.delete(linkedList.id);
+              await window.api.lists.update(linkedList.id, { name: toLocalName(linkedList.name) });
             }
           } else {
             await window.api.accounts.linkList(selected, accountId, calUrl);
@@ -244,16 +266,18 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
           if (found) { accountId = accId; book = found; break; }
         }
         if (!accountId || !book) continue;
-        const linkedBook = addressBooks.find((ab) => ab.carddav_addressbook_url === bookUrl);
+        const linkedBook = addressBooks.find((ab) => sameDavUrl(ab.carddav_addressbook_url, bookUrl));
         try {
           if (selected === "__new__") {
-            const b = await window.api.addressbooks?.create(book.displayName);
-            if (b) await window.api.addressbooks?.link(b.id, accountId, bookUrl);
+            // Idempotent connect -- reuses an existing linked book, never
+            // duplicates it (duplicate books are what triplicate contacts).
+            await window.api.addressbooks?.connect(accountId, bookUrl, book.displayName);
             accountsToSync.add(accountId);
           } else if (selected === "") {
             if (linkedBook) {
+              // Keep the book + contacts, just unlink and mark "(local)".
               await window.api.addressbooks?.unlink(linkedBook.id);
-              await window.api.addressbooks?.delete(linkedBook.id);
+              await window.api.addressbooks?.update(linkedBook.id, { name: toLocalName(linkedBook.name) });
             }
           }
         } catch (err: any) {
@@ -282,6 +306,27 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
     }
     setTestMsg(errors.length ? `Saved with errors: ${errors[0]}` : "Changes saved.");
     setBusy(false);
+  }
+
+  /** One-shot cleanup of duplicate lists / address books / contacts already in
+   *  the database (fallout from earlier connect/disconnect cycles). Keeps one
+   *  synced copy per collection and renames extras "(local)"; never deletes
+   *  tasks. */
+  async function cleanUpDuplicates() {
+    if (!window.api.maintenance) { setTestMsg("Cleanup not available in this build."); return; }
+    setBusy(true);
+    setTestMsg(null);
+    try {
+      const r = await window.api.maintenance.dedupe();
+      onListsChanged();
+      await refresh();
+      const changed = r.listsRenamedLocal + r.booksRenamedLocal + r.contactsRemoved;
+      setTestMsg(changed === 0 ? "No duplicates found." : r.details.join(" "));
+    } catch (err: any) {
+      setTestMsg(err?.message || String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function removeAccount(id: string) {
@@ -348,7 +393,7 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
               </div>
             )}
             {calendarsByAccount[acc.id]?.map((cal) => {
-              const linkedList = lists.find((l) => l.caldav_calendar_url === cal.url);
+              const linkedList = lists.find((l) => sameDavUrl(l.caldav_calendar_url, cal.url));
               const current = linkedList?.id ?? "";
               const isConnected = current !== "";
               const pending = pendingByCal[cal.url];
@@ -404,7 +449,7 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
                 <button onClick={() => discoverBooks(acc.id)} disabled={busy}>Find address books</button>
               </div>
               {addressBooksByAccount[acc.id]?.map((book) => {
-                const linkedBook = addressBooks.find((ab) => ab.carddav_addressbook_url === book.url);
+                const linkedBook = addressBooks.find((ab) => sameDavUrl(ab.carddav_addressbook_url, book.url));
                 const current = linkedBook?.id ?? "";
                 const isConnected = current !== "";
                 const pending = pendingByBook[book.url];
@@ -457,6 +502,13 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
                   {pendingCount} unsaved change{pendingCount === 1 ? "" : "s"}
                 </span>
               )}
+              <button
+                disabled={busy}
+                onClick={cleanUpDuplicates}
+                title="Merge duplicate lists, address books, and contacts left over from earlier connect/disconnect cycles. Keeps one synced copy and renames extras '(local)'. Never deletes your tasks."
+              >
+                Clean up duplicates
+              </button>
               <button
                 className="primary"
                 disabled={busy || pendingCount === 0}

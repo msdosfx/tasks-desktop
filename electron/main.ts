@@ -41,10 +41,11 @@ import {
   contactsByBook,
   contactCreate,
   contactUpdate,
-  contactDelete
+  contactDelete,
+  dedupeDatabase
 } from "./db.js";
-import { testConnection, discoverCalendars, linkListToCalendar, unlinkList, syncAccount, createServerCalendar, encryptPassword } from "./caldav.js";
-import { discoverAddressBooks, linkAddressBook, unlinkAddressBook, syncAccountContacts } from "./carddav.js";
+import { testConnection, discoverCalendars, linkListToCalendar, unlinkList, syncAccount, createServerCalendar, encryptPassword, connectCalendar } from "./caldav.js";
+import { discoverAddressBooks, linkAddressBook, unlinkAddressBook, syncAccountContacts, connectAddressBook } from "./carddav.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -91,6 +92,11 @@ function createWindow() {
     minWidth: 820,
     minHeight: 520,
     title: "Tasks Desktop",
+    // Explicit window icon so the taskbar button always shows the app icon
+    // regardless of how the exe was launched (installed shortcut, portable
+    // unpacked exe, or dev). Without this, Windows falls back to the generic
+    // Electron icon when no matching AppUserModelID shortcut is registered.
+    icon: nativeImage.createFromPath(iconPath(isDev ? "32x32-dev.png" : "256x256.png")),
     backgroundColor: "#1e1f22",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -368,6 +374,11 @@ function registerIpc() {
     return discoverAddressBooks(account);
   });
   ipcMain.handle("addressbooks:link", (_e, bookId: string, accountId: string, url: string) => linkAddressBook(bookId, accountId, url));
+  // Idempotent connect: reuse the existing linked book (matched by normalized
+  // URL) rather than creating a duplicate that would triplicate contacts.
+  ipcMain.handle("addressbooks:connect", (_e, accountId: string, url: string, displayName: string) =>
+    connectAddressBook(accountId, url, displayName)
+  );
   ipcMain.handle("addressbooks:unlink", (_e, bookId: string) => unlinkAddressBook(bookId));
 
   ipcMain.handle("contacts:all", () => contactsAll());
@@ -421,7 +432,15 @@ function registerIpc() {
   ipcMain.handle("accounts:linkList", (_e, listId: string, accountId: string, calendarUrl: string) =>
     linkListToCalendar(listId, accountId, calendarUrl)
   );
+  // Idempotent connect: reuses an existing list for this calendar (matched by
+  // normalized URL) instead of ever creating a duplicate local list.
+  ipcMain.handle("accounts:connectCalendar", (_e, accountId: string, calendarUrl: string, displayName: string, color?: string | null) =>
+    connectCalendar(accountId, calendarUrl, displayName, color)
+  );
   ipcMain.handle("accounts:unlinkList", (_e, listId: string) => unlinkList(listId));
+  // One-shot cleanup of duplicate lists / address books / contacts already in
+  // the database (the http<->https reconnect fallout). Non-destructive to tasks.
+  ipcMain.handle("maintenance:dedupe", () => dedupeDatabase());
   ipcMain.handle("accounts:createServerCalendar", async (_e, accountId: string, name: string) => {
     const account = accountsAll().find((a) => a.id === accountId);
     if (!account) throw new Error("Account not found");

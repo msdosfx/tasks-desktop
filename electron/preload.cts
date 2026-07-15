@@ -37,7 +37,11 @@ const api = {
     delete: (id: string) => ipcRenderer.invoke("addressbooks:delete", id),
     discover: (accountId: string) => ipcRenderer.invoke("addressbooks:discover", accountId),
     link: (bookId: string, accountId: string, url: string) => ipcRenderer.invoke("addressbooks:link", bookId, accountId, url),
+    connect: (accountId: string, url: string, displayName: string) => ipcRenderer.invoke("addressbooks:connect", accountId, url, displayName),
     unlink: (bookId: string) => ipcRenderer.invoke("addressbooks:unlink", bookId)
+  },
+  maintenance: {
+    dedupe: () => ipcRenderer.invoke("maintenance:dedupe")
   },
   contacts: {
     all: () => ipcRenderer.invoke("contacts:all"),
@@ -64,6 +68,8 @@ const api = {
     discoverCalendars: (accountId: string) => ipcRenderer.invoke("accounts:discoverCalendars", accountId),
     linkList: (listId: string, accountId: string, calendarUrl: string) =>
       ipcRenderer.invoke("accounts:linkList", listId, accountId, calendarUrl),
+    connectCalendar: (accountId: string, calendarUrl: string, displayName: string, color?: string | null) =>
+      ipcRenderer.invoke("accounts:connectCalendar", accountId, calendarUrl, displayName, color),
     unlinkList: (listId: string) => ipcRenderer.invoke("accounts:unlinkList", listId),
     sync: (accountId: string) => ipcRenderer.invoke("accounts:sync", accountId),
     createServerCalendar: (accountId: string, name: string) => ipcRenderer.invoke("accounts:createServerCalendar", accountId, name)

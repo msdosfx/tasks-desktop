@@ -6,7 +6,9 @@ import {
   AddressBook,
   Contact,
   addressBooksAll,
+  addressBookCreate,
   addressBookUpdate,
+  davUrlKey,
   contactsByBook,
   contactsByBookWithUid,
   contactCreate,
@@ -67,12 +69,37 @@ export async function discoverAddressBooks(account: CaldavAccount): Promise<Disc
 /** Link a local address book to a discovered remote one (unlinking any other
  *  local book pointing at the same remote first), mirroring linkListToCalendar. */
 export function linkAddressBook(bookId: string, accountId: string, url: string) {
+  // Normalized-key match (see davUrlKey) so an http<->https change on the same
+  // address book is recognized instead of orphaning the old book.
+  const key = davUrlKey(url);
   for (const b of addressBooksAll()) {
-    if (b.carddav_account_id === accountId && b.carddav_addressbook_url === url && b.id !== bookId) {
+    if (b.carddav_account_id === accountId && davUrlKey(b.carddav_addressbook_url) === key && b.id !== bookId) {
       addressBookUpdate(b.id, { carddav_account_id: null, carddav_addressbook_url: null, carddav_ctag: null } as Partial<AddressBook>);
     }
   }
   addressBookUpdate(bookId, { carddav_account_id: accountId, carddav_addressbook_url: url, carddav_ctag: null } as Partial<AddressBook>);
+}
+
+/** Find an address book already linked to this remote book for the account,
+ *  matching by normalized URL. */
+export function bookFindByUrl(accountId: string, url: string): AddressBook | undefined {
+  const key = davUrlKey(url);
+  return addressBooksAll().find(
+    (b) => b.carddav_account_id === accountId && davUrlKey(b.carddav_addressbook_url) === key
+  );
+}
+
+/** Idempotent connect for the Settings UI -- reuses an existing linked book
+ *  (matched by normalized URL) instead of creating a duplicate. Prevents the
+ *  duplicate-address-book bug that produces triplicate contacts. */
+export function connectAddressBook(accountId: string, url: string, displayName: string): AddressBook {
+  const existing = bookFindByUrl(accountId, url);
+  if (existing) {
+    return addressBookUpdate(existing.id, { carddav_addressbook_url: url } as Partial<AddressBook>);
+  }
+  const book = addressBookCreate(displayName);
+  linkAddressBook(book.id, accountId, url);
+  return addressBooksAll().find((b) => b.id === book.id)!;
 }
 
 export function unlinkAddressBook(bookId: string) {

@@ -204,7 +204,16 @@ declare global {
         delete: (id: string) => Promise<void>;
         discover: (accountId: string) => Promise<DiscoveredAddressBook[]>;
         link: (bookId: string, accountId: string, url: string) => Promise<void>;
+        connect: (accountId: string, url: string, displayName: string) => Promise<AddressBook>;
         unlink: (bookId: string) => Promise<void>;
+      };
+      /** Absent in the Thunderbird add-on shim -- always optional-chain. */
+      maintenance?: {
+        dedupe: () => Promise<{
+          listsMerged: number; listsRenamedLocal: number;
+          booksMerged: number; booksRenamedLocal: number;
+          contactsRemoved: number; details: string[];
+        }>;
       };
       /** Absent in the Thunderbird add-on shim -- always optional-chain. */
       contacts?: {
@@ -235,6 +244,7 @@ declare global {
         testConnection: (account: any) => Promise<{ ok: boolean; message: string }>;
         discoverCalendars: (accountId: string) => Promise<DiscoveredCalendar[]>;
         linkList: (listId: string, accountId: string, calendarUrl: string) => Promise<void>;
+        connectCalendar: (accountId: string, calendarUrl: string, displayName: string, color?: string | null) => Promise<TaskList>;
         unlinkList: (listId: string) => Promise<void>;
         sync: (accountId: string) => Promise<{ listId: string; pulled: number; pushed: number; errors: string[] }[]>;
         createServerCalendar: (accountId: string, name: string) => Promise<TaskList>;

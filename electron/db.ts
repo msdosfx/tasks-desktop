@@ -375,9 +375,42 @@ function migrate(db: DatabaseSync) {
 
 const nowIso = () => new Date().toISOString();
 
+/** Normalized key for comparing CalDAV/CardDAV collection URLs. Collapses the
+ *  differences that made the app treat the same remote collection as "new"
+ *  after the user toggled the server between http/https or changed a trailing
+ *  slash -- the root cause of duplicate local lists/address books. Two URLs
+ *  that point at the same collection produce the same key here regardless of:
+ *    - scheme (http vs https)
+ *    - default ports (:80 / :443)
+ *    - trailing slashes
+ *    - host casing
+ *  The raw URL is still stored on the row; this is only used for matching. */
+export function davUrlKey(url: string | null | undefined): string {
+  if (!url) return "";
+  let s = String(url).trim();
+  s = s.replace(/^https?:\/\//i, "");     // scheme-insensitive: http <-> https
+  s = s.replace(/\/+$/, "");              // ignore trailing slash(es)
+  s = s.replace(/:(80|443)(\/|$)/, "$2"); // drop default ports
+  const slash = s.indexOf("/");
+  const host = (slash === -1 ? s : s.slice(0, slash)).toLowerCase();
+  const path = slash === -1 ? "" : s.slice(slash);
+  return host + path;
+}
+
 // ---------- Lists ----------
 export function listsAll(): TaskList[] {
   return getDb().prepare(`SELECT * FROM lists ORDER BY sort_order ASC, name ASC`).all() as unknown as TaskList[];
+}
+
+/** Find a list already linked to the given remote calendar for this account,
+ *  comparing URLs by normalized key so an http<->https (or trailing-slash)
+ *  change still matches the existing list instead of spawning a duplicate.
+ *  Returns undefined if none. */
+export function listFindByCalendar(accountId: string, calendarUrl: string): TaskList | undefined {
+  const key = davUrlKey(calendarUrl);
+  return listsAll().find(
+    (l) => l.caldav_account_id === accountId && davUrlKey(l.caldav_calendar_url) === key
+  );
 }
 
 export function listCreate(name: string, color = "#4a90d9"): TaskList {
@@ -415,6 +448,125 @@ export function listDelete(id: string) {
   const db = getDb();
   db.prepare(`DELETE FROM tasks WHERE list_id = ?`).run(id);
   db.prepare(`DELETE FROM lists WHERE id = ?`).run(id);
+}
+
+/** Append " (local)" to a name unless it's already tagged, so a disconnected /
+ *  orphaned copy is visibly distinct from its synced counterpart. */
+export function localSuffixName(name: string): string {
+  return /\(local\)\s*$/i.test(name) ? name : `${name} (local)`;
+}
+
+export interface DedupeSummary {
+  listsMerged: number;      // duplicate synced lists collapsed to one
+  listsRenamedLocal: number; // orphan/local duplicates renamed "(local)"
+  booksMerged: number;
+  booksRenamedLocal: number;
+  contactsRemoved: number;   // exact per-(book,uid) duplicate contacts removed
+  details: string[];
+}
+
+/** One-shot cleanup for the duplicate-collection bug. Non-destructive to task
+ *  data: it never deletes a list or its tasks. It (a) keeps a single synced
+ *  list/address book per remote collection (matched by normalized URL) and
+ *  renames the extra copies to "(local)" so nothing is silently lost, and
+ *  (b) removes exact duplicate contacts that share the same (address book,
+ *  CardDAV UID) -- the identical copies produced by the triplicate bug --
+ *  keeping the freshest one. Safe to run repeatedly (idempotent). */
+export function dedupeDatabase(): DedupeSummary {
+  const db = getDb();
+  const summary: DedupeSummary = {
+    listsMerged: 0, listsRenamedLocal: 0, booksMerged: 0,
+    booksRenamedLocal: 0, contactsRemoved: 0, details: []
+  };
+
+  // Prefer the synced copy of a collection as the "keeper": one that still has
+  // a ctag/etag from the server, else the one with the most items, else oldest.
+  // --- Lists: group linked lists by (account, normalized calendar URL). ---
+  const linkedLists = listsAll().filter((l) => l.caldav_account_id && l.caldav_calendar_url);
+  const listGroups = new Map<string, TaskList[]>();
+  for (const l of linkedLists) {
+    const k = `${l.caldav_account_id}|${davUrlKey(l.caldav_calendar_url)}`;
+    (listGroups.get(k) ?? listGroups.set(k, []).get(k)!).push(l);
+  }
+  for (const group of listGroups.values()) {
+    if (group.length < 2) continue;
+    const taskCount = (id: string) =>
+      (db.prepare(`SELECT COUNT(*) AS c FROM tasks WHERE list_id = ? AND deleted = 0`).get(id) as any).c as number;
+    group.sort((a, b) => {
+      const ac = a.caldav_ctag ? 1 : 0, bc = b.caldav_ctag ? 1 : 0;
+      if (ac !== bc) return bc - ac;                 // synced (has ctag) first
+      if (taskCount(a.id) !== taskCount(b.id)) return taskCount(b.id) - taskCount(a.id);
+      return a.created_at.localeCompare(b.created_at); // oldest first
+    });
+    const [keeper, ...extras] = group;
+    for (const e of extras) {
+      // Unlink so it never touches the server again, and mark it "(local)".
+      db.prepare(
+        `UPDATE lists SET caldav_account_id=NULL, caldav_calendar_url=NULL, caldav_ctag=NULL, name=?, updated_at=? WHERE id=?`
+      ).run(localSuffixName(e.name), nowIso(), e.id);
+      summary.listsRenamedLocal++;
+    }
+    summary.listsMerged++;
+    summary.details.push(`List "${keeper.name}": kept 1 synced, renamed ${extras.length} duplicate(s) to "(local)".`);
+  }
+
+  // Local-only lists that duplicate the NAME of a still-synced list get the
+  // "(local)" tag too, so you can tell which one syncs.
+  const all = listsAll();
+  const syncedNames = new Set(all.filter((l) => l.caldav_calendar_url).map((l) => l.name.toLowerCase()));
+  for (const l of all) {
+    if (!l.caldav_calendar_url && syncedNames.has(l.name.toLowerCase()) && !/\(local\)\s*$/i.test(l.name)) {
+      db.prepare(`UPDATE lists SET name=?, updated_at=? WHERE id=?`).run(localSuffixName(l.name), nowIso(), l.id);
+      summary.listsRenamedLocal++;
+    }
+  }
+
+  // --- Address books: same treatment, grouped by (account, normalized URL). ---
+  const linkedBooks = addressBooksAll().filter((b) => b.carddav_account_id && b.carddav_addressbook_url);
+  const bookGroups = new Map<string, AddressBook[]>();
+  for (const b of linkedBooks) {
+    const k = `${b.carddav_account_id}|${davUrlKey(b.carddav_addressbook_url)}`;
+    (bookGroups.get(k) ?? bookGroups.set(k, []).get(k)!).push(b);
+  }
+  for (const group of bookGroups.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => (b.carddav_ctag ? 1 : 0) - (a.carddav_ctag ? 1 : 0) || a.created_at.localeCompare(b.created_at));
+    const [keeper, ...extras] = group;
+    for (const e of extras) {
+      db.prepare(
+        `UPDATE address_books SET carddav_account_id=NULL, carddav_addressbook_url=NULL, carddav_ctag=NULL, name=?, updated_at=? WHERE id=?`
+      ).run(localSuffixName(e.name), nowIso(), e.id);
+      summary.booksRenamedLocal++;
+    }
+    summary.booksMerged++;
+    summary.details.push(`Address book "${keeper.name}": kept 1 synced, renamed ${extras.length} duplicate(s) to "(local)".`);
+  }
+
+  // --- Contacts: drop exact duplicates sharing (book, CardDAV UID). These are
+  //     the identical copies from the triplicate bug; keep the freshest. ---
+  const dupRows = db.prepare(
+    `SELECT address_book_id, carddav_uid, COUNT(*) AS c
+       FROM contacts
+      WHERE carddav_uid IS NOT NULL AND carddav_uid <> '' AND deleted = 0
+      GROUP BY address_book_id, carddav_uid
+     HAVING c > 1`
+  ).all() as { address_book_id: string; carddav_uid: string; c: number }[];
+  for (const d of dupRows) {
+    const copies = db.prepare(
+      `SELECT id FROM contacts WHERE address_book_id = ? AND carddav_uid = ? AND deleted = 0
+         ORDER BY sequence DESC, updated_at DESC`
+    ).all(d.address_book_id, d.carddav_uid) as { id: string }[];
+    for (const c of copies.slice(1)) {
+      db.prepare(`DELETE FROM contacts WHERE id = ?`).run(c.id);
+      summary.contactsRemoved++;
+    }
+  }
+  if (summary.contactsRemoved > 0) {
+    summary.details.push(`Removed ${summary.contactsRemoved} duplicate contact row(s) (kept one per person).`);
+  }
+
+  if (summary.details.length === 0) summary.details.push("No duplicates found — nothing to clean up.");
+  return summary;
 }
 
 // ---------- Tasks ----------

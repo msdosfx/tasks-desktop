@@ -13,6 +13,8 @@ import {
   listsAll,
   listUpdate,
   listCreate,
+  listFindByCalendar,
+  davUrlKey,
   tasksByList,
   taskCreate,
   taskUpdate,
@@ -166,8 +168,12 @@ export async function discoverCalendars(account: CaldavAccount): Promise<Discove
  *  linked to this same calendar is unlinked first, so a calendar only ever
  *  points at one list at a time. */
 export function linkListToCalendar(listId: string, accountId: string, calendarUrl: string) {
+  // Match by normalized key so a calendar already linked under http:// isn't
+  // treated as different from the same calendar under https:// -- otherwise
+  // relinking after a scheme change leaves a stale orphan behind.
+  const key = davUrlKey(calendarUrl);
   const previouslyLinked = listsAll().filter(
-    (l) => l.caldav_account_id === accountId && l.caldav_calendar_url === calendarUrl && l.id !== listId
+    (l) => l.caldav_account_id === accountId && davUrlKey(l.caldav_calendar_url) === key && l.id !== listId
   );
   for (const l of previouslyLinked) {
     listUpdate(l.id, { caldav_account_id: null, caldav_calendar_url: null, caldav_ctag: null } as Partial<TaskList>);
@@ -177,6 +183,29 @@ export function linkListToCalendar(listId: string, accountId: string, calendarUr
     caldav_calendar_url: calendarUrl,
     caldav_ctag: null
   } as Partial<TaskList>);
+}
+
+/** Idempotent "connect this remote calendar" used by the Settings UI. If a
+ *  local list is already linked to this calendar (matched by normalized URL,
+ *  so http<->https reconnects are recognized), it is reused -- its stored URL
+ *  refreshed to the current one -- instead of creating a duplicate. Only when
+ *  no such list exists is a new one created. This is the single choke point
+ *  that prevents the duplicate-local-list bug at its source. */
+export function connectCalendar(
+  accountId: string,
+  calendarUrl: string,
+  displayName: string,
+  color?: string | null
+): TaskList {
+  const existing = listFindByCalendar(accountId, calendarUrl);
+  if (existing) {
+    // Refresh the raw URL to the current scheme/host so future exact-match
+    // paths line up, but keep the user's name and existing tasks.
+    return listUpdate(existing.id, { caldav_calendar_url: calendarUrl } as Partial<TaskList>);
+  }
+  const list = listCreate(displayName, color ?? undefined);
+  linkListToCalendar(list.id, accountId, calendarUrl);
+  return listsAll().find((l) => l.id === list.id)!;
 }
 
 /** Remove the calendar link from a list (sets it back to local-only). */
