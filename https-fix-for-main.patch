@@ -1,0 +1,61 @@
+--- a/electron/main.ts
++++ b/electron/main.ts
+@@ -49,13 +49,24 @@
+   closeToTray: "0", // off by default: the X button really quits; opt in via settings
+   launchAtLogin: "0",
+   syncIntervalMinutes: "60", // background auto-sync; matches Tasks.org's default; "0" = manual only
+-  syncHotkey: "CmdOrCtrl+R" // accelerator for Sync Now; "" = no hotkey
++  syncHotkey: "CmdOrCtrl+R", // accelerator for Sync Now; "" = no hotkey
++  allowInsecureCerts: "0" // opt-in: accept self-signed TLS certs (self-hosted LAN servers)
+ };
+
+ function getSetting(key: string): string {
+   return settingsAll()[key] ?? SETTING_DEFAULTS[key] ?? "";
+ }
+
++/** Opt-in acceptance of self-signed certificates for self-hosted servers on
++ *  the LAN (e.g. Synology DSM's default HTTPS cert on :5001). Off by default;
++ *  when on it turns off TLS verification for the app's Node fetches (undici
++ *  honors NODE_TLS_REJECT_UNAUTHORIZED via tls.connect). Applied at startup
++ *  and whenever the toggle changes. */
++function applyTlsSetting() {
++  if (getSetting("allowInsecureCerts") === "1") process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
++  else delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
++}
++
+ function showMainWindow() {
+   if (!mainWindow) { createWindow(); return; }
+   if (!mainWindow.isVisible()) mainWindow.show();
+@@ -299,6 +310,7 @@
+     settingSet(key, value);
+     if (key === "launchAtLogin") applyLaunchAtLogin(value === "1");
+     if (key === "syncHotkey") buildMenu(); // apply new accelerator immediately
++    if (key === "allowInsecureCerts") applyTlsSetting();
+   });
+
+   ipcMain.handle("lists:all", () => listsAll());
+@@ -379,6 +391,7 @@
+   createWindow();
+   setupTray();
+   setupAutoUpdater();
++  applyTlsSetting();
+   applyLaunchAtLogin(getSetting("launchAtLogin") === "1");
+
+   // First reminder pass shortly after launch (catches anything that came due
+--- a/src/components/SettingsModal.tsx
++++ b/src/components/SettingsModal.tsx
+@@ -418,6 +418,14 @@
+                 />
+                 Start Tasks Desktop when the computer starts
+               </label>
++              <label className="pref-row" title="Enable if your server uses a self-signed certificate (e.g. Synology DSM over HTTPS on your LAN). Turns off certificate verification for the app's sync connections — only use on servers you trust.">
++                <input
++                  type="checkbox"
++                  checked={prefs.allowInsecureCerts === "1"}
++                  onChange={(e) => setPref("allowInsecureCerts", e.target.checked ? "1" : "0")}
++                />
++                Allow self-signed HTTPS certificates (self-hosted servers)
++              </label>
+             </div>
+           </>
+         )}
