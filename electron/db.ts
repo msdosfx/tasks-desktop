@@ -145,6 +145,28 @@ export interface Contact {
   sequence: number;
   created_at: string;
   updated_at: string;
+  /** Not a stored column -- decorated onto the row for the UI (see
+   *  contactsAllForUi): comma-separated labels this contact inherits from
+   *  CardDAV group cards, merged with its own CATEGORIES at display time. */
+  group_labels?: string;
+}
+
+/** A CardDAV "group" card. Synology (and Apple/DAVx5) represent labels like
+ *  "DP21"/"wedding" as separate cards listing their members by UID, rather
+ *  than as CATEGORIES on each contact. Stored apart from contacts so the
+ *  contact's own CATEGORIES round-trips untouched. */
+export interface ContactGroup {
+  id: string;
+  address_book_id: string;
+  name: string;
+  carddav_uid: string | null;
+  carddav_href: string | null;
+  carddav_etag: string | null;
+  member_uids: string; // JSON array of member contact UIDs
+  raw_vcard: string;
+  deleted: 0 | 1;
+  created_at: string;
+  updated_at: string;
 }
 
 function dbPath() {
@@ -306,6 +328,22 @@ function migrate(db: DatabaseSync) {
       FOREIGN KEY (address_book_id) REFERENCES address_books(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_contacts_book ON contacts(address_book_id);
+
+    CREATE TABLE IF NOT EXISTS contact_groups (
+      id TEXT PRIMARY KEY,
+      address_book_id TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      carddav_uid TEXT,
+      carddav_href TEXT,
+      carddav_etag TEXT,
+      member_uids TEXT NOT NULL DEFAULT '[]',
+      raw_vcard TEXT NOT NULL DEFAULT '',
+      deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (address_book_id) REFERENCES address_books(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_contact_groups_book ON contact_groups(address_book_id);
   `);
 
   // Older databases predate these columns.
@@ -472,12 +510,16 @@ export interface DedupeSummary {
  *  (b) removes exact duplicate contacts that share the same (address book,
  *  CardDAV UID) -- the identical copies produced by the triplicate bug --
  *  keeping the freshest one. Safe to run repeatedly (idempotent). */
-export function dedupeDatabase(): DedupeSummary {
+export function dedupeDatabase(dryRun = false): DedupeSummary {
   const db = getDb();
   const summary: DedupeSummary = {
     listsMerged: 0, listsRenamedLocal: 0, booksMerged: 0,
     booksRenamedLocal: 0, contactsRemoved: 0, details: []
   };
+  // dryRun: run every change inside a transaction and roll it back at the end,
+  // so the caller can preview exactly what would happen without mutating data.
+  if (dryRun) db.exec("BEGIN");
+  try {
 
   // Prefer the synced copy of a collection as the "keeper": one that still has
   // a ctag/etag from the server, else the one with the most items, else oldest.
@@ -532,14 +574,18 @@ export function dedupeDatabase(): DedupeSummary {
     if (group.length < 2) continue;
     group.sort((a, b) => (b.carddav_ctag ? 1 : 0) - (a.carddav_ctag ? 1 : 0) || a.created_at.localeCompare(b.created_at));
     const [keeper, ...extras] = group;
+    // These books point at the *same* remote collection (matched by normalized
+    // URL), so they are genuinely redundant. Move their contacts and group
+    // cards onto the keeper, then remove the extra book. The per-(book,uid)
+    // contact dedupe below then collapses the now-colocated duplicate rows.
     for (const e of extras) {
-      db.prepare(
-        `UPDATE address_books SET carddav_account_id=NULL, carddav_addressbook_url=NULL, carddav_ctag=NULL, name=?, updated_at=? WHERE id=?`
-      ).run(localSuffixName(e.name), nowIso(), e.id);
+      db.prepare(`UPDATE contacts SET address_book_id = ? WHERE address_book_id = ?`).run(keeper.id, e.id);
+      db.prepare(`UPDATE contact_groups SET address_book_id = ? WHERE address_book_id = ?`).run(keeper.id, e.id);
+      db.prepare(`DELETE FROM address_books WHERE id = ?`).run(e.id);
       summary.booksRenamedLocal++;
     }
     summary.booksMerged++;
-    summary.details.push(`Address book "${keeper.name}": kept 1 synced, renamed ${extras.length} duplicate(s) to "(local)".`);
+    summary.details.push(`Address book "${keeper.name}": merged ${extras.length} duplicate connection(s) to the same remote and removed the redundant book(s).`);
   }
 
   // --- Contacts: drop exact duplicates sharing (book, CardDAV UID). These are
@@ -565,8 +611,30 @@ export function dedupeDatabase(): DedupeSummary {
     summary.details.push(`Removed ${summary.contactsRemoved} duplicate contact row(s) (kept one per person).`);
   }
 
+  // NOTE: merging same-person/different-UID cards (same name + shared email,
+  // etc.) is intentionally NOT done here anymore. It could soft-delete real
+  // server cards on a heuristic guess, so it now lives behind the manual
+  // "Merge duplicates" review (findDuplicateClusters + MergeDuplicatesView),
+  // where the user approves each merge. This repair pass stays conservative and
+  // never deletes server contact data.
+
+  // Remove phantom "contacts" that are actually CardDAV group cards imported by
+  // a pre-fix build (they showed up as empty labels). Group membership now
+  // lives in contact_groups; the label is derived from there.
+  const phantom = db.prepare(
+    `DELETE FROM contacts WHERE carddav_uid IN (SELECT carddav_uid FROM contact_groups WHERE carddav_uid IS NOT NULL AND carddav_uid <> '')`
+  ).run();
+  const phantomCount = Number(phantom.changes || 0);
+  if (phantomCount > 0) {
+    summary.contactsRemoved += phantomCount;
+    summary.details.push(`Removed ${phantomCount} group-card row(s) that were appearing as empty contacts.`);
+  }
+
   if (summary.details.length === 0) summary.details.push("No duplicates found — nothing to clean up.");
-  return summary;
+    return summary;
+  } finally {
+    if (dryRun) db.exec("ROLLBACK");
+  }
 }
 
 // ---------- Tasks ----------
@@ -1267,6 +1335,21 @@ export function contactDelete(id: string, hard = false) {
   }
 }
 
+/** Manual merge: write the user's chosen combined fields onto the keeper (as a
+ *  normal edit, so it's marked dirty and pushes on the next sync), then
+ *  soft-delete the other contacts so their removal also propagates to the
+ *  server. Returns the updated keeper. */
+export function contactsMerge(keeperId: string, loserIds: string[], patch: Partial<Contact>): Contact {
+  const keeper = contactGet(keeperId);
+  if (!keeper) throw new Error("Keeper contact not found");
+  const updated = contactUpdate(keeperId, patch);
+  for (const id of loserIds) {
+    if (id === keeperId) continue;
+    contactDelete(id, false);
+  }
+  return updated;
+}
+
 /** All contacts (including soft-deleted) for a book, keyed by CardDAV uid --
  *  used by the sync engine to diff against what the server currently has. */
 export function contactsByBookWithUid(bookId: string): Map<string, Contact> {
@@ -1290,4 +1373,93 @@ export function contactsPruneMissing(bookId: string, remoteUids: Set<string>) {
       db.prepare(`DELETE FROM contacts WHERE id = ?`).run(row.id);
     }
   }
+}
+
+// ---------- Contact groups (CardDAV group cards -> labels) ----------
+export function contactGroupsByBook(bookId: string): ContactGroup[] {
+  return getDb()
+    .prepare(`SELECT * FROM contact_groups WHERE address_book_id = ? AND deleted = 0`)
+    .all(bookId) as unknown as ContactGroup[];
+}
+
+/** Insert or update a group card by (book, uid). Match on carddav_uid so a
+ *  re-pull of the same group card updates its membership in place. */
+export function contactGroupUpsert(input: {
+  address_book_id: string;
+  name: string;
+  carddav_uid: string | null;
+  carddav_href: string | null;
+  carddav_etag: string | null;
+  member_uids: string[];
+  raw_vcard: string;
+}): void {
+  const db = getDb();
+  const now = nowIso();
+  const members = JSON.stringify(input.member_uids);
+  const existing = input.carddav_uid
+    ? (db
+        .prepare(`SELECT id FROM contact_groups WHERE address_book_id = ? AND carddav_uid = ?`)
+        .get(input.address_book_id, input.carddav_uid) as { id: string } | undefined)
+    : undefined;
+  if (existing) {
+    db.prepare(
+      `UPDATE contact_groups SET name=?, carddav_href=?, carddav_etag=?, member_uids=?, raw_vcard=?, deleted=0, updated_at=? WHERE id=?`
+    ).run(input.name, input.carddav_href, input.carddav_etag, members, input.raw_vcard, now, existing.id);
+  } else {
+    db.prepare(
+      `INSERT INTO contact_groups (id, address_book_id, name, carddav_uid, carddav_href, carddav_etag, member_uids, raw_vcard, deleted, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+    ).run(nanoid(), input.address_book_id, input.name, input.carddav_uid, input.carddav_href, input.carddav_etag, members, input.raw_vcard, now, now);
+  }
+}
+
+/** Remove local group cards for this book whose uid is no longer on the server. */
+export function contactGroupsPruneMissing(bookId: string, remoteUids: Set<string>) {
+  const db = getDb();
+  const local = db
+    .prepare(`SELECT id, carddav_uid FROM contact_groups WHERE address_book_id = ?`)
+    .all(bookId) as { id: string; carddav_uid: string | null }[];
+  for (const row of local) {
+    if (row.carddav_uid && !remoteUids.has(row.carddav_uid)) {
+      db.prepare(`DELETE FROM contact_groups WHERE id = ?`).run(row.id);
+    }
+  }
+}
+
+/** Map of contact-row id -> labels inherited from group cards, matched by
+ *  (book, member UID). */
+function groupLabelsByContactId(): Map<string, string[]> {
+  const db = getDb();
+  const groups = db.prepare(`SELECT * FROM contact_groups WHERE deleted = 0`).all() as unknown as ContactGroup[];
+  const byBookUid = new Map<string, string[]>(); // "bookId|uid" -> [names]
+  for (const g of groups) {
+    let members: string[] = [];
+    try { const v = JSON.parse(g.member_uids || "[]"); if (Array.isArray(v)) members = v; } catch { /* ignore */ }
+    for (const uid of members) {
+      const k = `${g.address_book_id}|${uid}`;
+      const arr = byBookUid.get(k) ?? byBookUid.set(k, []).get(k)!;
+      if (g.name && !arr.includes(g.name)) arr.push(g.name);
+    }
+  }
+  const rows = db.prepare(`SELECT id, address_book_id, carddav_uid FROM contacts WHERE deleted = 0`).all() as
+    { id: string; address_book_id: string; carddav_uid: string | null }[];
+  const byId = new Map<string, string[]>();
+  for (const r of rows) {
+    if (!r.carddav_uid) continue;
+    const names = byBookUid.get(`${r.address_book_id}|${r.carddav_uid}`);
+    if (names && names.length) byId.set(r.id, names);
+  }
+  return byId;
+}
+
+/** Contacts decorated with group-derived `group_labels` for the renderer. Keeps
+ *  the stored `categories` column untouched (so it round-trips), merging group
+ *  membership only for display/filter. */
+export function contactsAllForUi(): Contact[] {
+  const contacts = contactsAll();
+  const byId = groupLabelsByContactId();
+  return contacts.map((c) => {
+    const names = byId.get(c.id);
+    return names && names.length ? { ...c, group_labels: names.join(", ") } : c;
+  });
 }

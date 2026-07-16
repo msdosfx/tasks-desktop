@@ -41,14 +41,16 @@ const api = {
     unlink: (bookId: string) => ipcRenderer.invoke("addressbooks:unlink", bookId)
   },
   maintenance: {
-    dedupe: () => ipcRenderer.invoke("maintenance:dedupe")
+    dedupe: (dryRun?: boolean) => ipcRenderer.invoke("maintenance:dedupe", dryRun)
   },
   contacts: {
     all: () => ipcRenderer.invoke("contacts:all"),
     byBook: (bookId: string) => ipcRenderer.invoke("contacts:byBook", bookId),
     create: (input: any) => ipcRenderer.invoke("contacts:create", input),
     update: (id: string, patch: any) => ipcRenderer.invoke("contacts:update", id, patch),
-    delete: (id: string, hard?: boolean) => ipcRenderer.invoke("contacts:delete", id, hard)
+    delete: (id: string, hard?: boolean) => ipcRenderer.invoke("contacts:delete", id, hard),
+    import: (opts: { label: string; bookId: string; createNew: boolean }) => ipcRenderer.invoke("contacts:import", opts),
+    merge: (keeperId: string, loserIds: string[], patch: any) => ipcRenderer.invoke("contacts:merge", keeperId, loserIds, patch)
   },
   reminders: {
     for: (ownerType: "task" | "event", ownerId: string) => ipcRenderer.invoke("reminders:for", ownerType, ownerId),

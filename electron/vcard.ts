@@ -47,6 +47,49 @@ export function newContactUid(): string {
   return `${nanoid()}@tasks-desktop`;
 }
 
+/** A CardDAV "group" card (Apple/DAVx5 convention). Synology stores labels
+ *  like "DP21"/"wedding" as these separate cards -- a card per label whose
+ *  members are listed by UID -- rather than as CATEGORIES on each contact. */
+export interface ParsedGroup {
+  uid: string | null;
+  name: string;
+  memberUids: string[];
+}
+
+/** Detect a group card and return its name + member UIDs. Returns null for an
+ *  ordinary contact card. Handles both the Apple/DAVx5 X-ADDRESSBOOKSERVER-*
+ *  properties (vCard 3.0) and the standard KIND/MEMBER properties (vCard 4). */
+export function parseGroupCard(vcf: string): ParsedGroup | null {
+  try {
+    const comp = new ICAL.Component(ICAL.parse(vcf));
+    const kind = String(
+      comp.getFirstPropertyValue("x-addressbookserver-kind") ??
+      comp.getFirstPropertyValue("kind") ??
+      ""
+    ).toLowerCase();
+    if (kind !== "group") return null;
+    const memberProps = [
+      ...comp.getAllProperties("x-addressbookserver-member"),
+      ...comp.getAllProperties("member")
+    ];
+    const memberUids = memberProps
+      .map((p) => String(p.getFirstValue() ?? ""))
+      .map((v) => v.replace(/^urn:uuid:/i, "").replace(/^urn:/i, "").trim())
+      .filter(Boolean);
+    return {
+      uid: (comp.getFirstPropertyValue("uid") as string) || null,
+      name:
+        (comp.getFirstPropertyValue("fn") as string) ||
+        (comp.getFirstPropertyValue("n") as string) ||
+        "",
+      memberUids
+    };
+  } catch (err) {
+    console.error("Failed to parse group vCard", err);
+    return null;
+  }
+}
+
 export function displayName(c: ParsedContact): string {
   const joined = [c.prefix, c.first_name, c.middle_name, c.last_name, c.suffix]
     .map((s) => (s || "").trim())

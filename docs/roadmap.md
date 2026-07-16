@@ -227,6 +227,55 @@
   table + dirty-flag sync like tasks, and UI. Also opens the door to assigning contacts
   to tasks later.
 
+## Notes sync — NEEDS RESEARCH + PLAN (added 2026-07-15)
+- Idea raised while thinking about the server-installation variant: add **Notes** as a synced
+  object type alongside tasks/events/contacts. Requires real research + a plan before building —
+  parked deliberately.
+- **Protocol findings (2026-07-15):** notes are NOT a CardDAV thing (that's contacts only). The
+  standards path is **CalDAV carrying `VJOURNAL`** (iCalendar RFC 5545) — same protocol family as
+  our `VEVENT`/`VTODO`, so we could reuse the existing CalDAV account/sync plumbing and add a third
+  component type. ical.js already parses vCard/iCal, so a `VJOURNAL` parser is in reach.
+- **The catch — server + client support is thin.** `VJOURNAL` is rarely used; support is uneven.
+  On Android the only app that syncs notes as `VJOURNAL` over CalDAV is **jtx Board (via DAVx5)**.
+  And the **CalDAV server itself must accept `VJOURNAL`** — many don't. **Synology is the open
+  question**: Synology Calendar's CalDAV is built around events + tasks, and Synology's own notes
+  product (Note Station) uses a separate non-DAV sync. So `VJOURNAL` against this user's Synology
+  is unverified — **test first** (push one note via jtx Board, or PUT a minimal `VJOURNAL`, and see
+  if it sticks) before designing anything on this path.
+- **Fallback if Synology rejects `VJOURNAL`:** **WebDAV file sync** — notes as plain Markdown/txt
+  files over WebDAV (the Joplin / Standard Notes / Nextcloud Notes model). This is the "third thing"
+  — a separate subsystem, doesn't touch CalDAV/CardDAV code, won't merge into the calendar/contacts
+  collections. Synology does expose WebDAV, so it's viable but is its own integration.
+- **When the app becomes a server too** (see bundled-server section below): if we embed a CalDAV
+  server, we control whether it accepts `VJOURNAL`, which removes the Synology-support blocker for
+  self-hosted users — worth weighing the notes-as-`VJOURNAL` path as part of that build.
+- Sources captured: DAVx5 manual (Tasks/Notes/Journals), jtx Board sync docs.
+
+### Markdown notes — user's preferred direction (added 2026-07-15)
+- User preference is **Markdown notes**, not iCal `VJOURNAL`. Wants, roughly in order:
+  1. **A Notes tab that views + edits Markdown files from an existing folder** on disk — no sync
+     required for v1. This is the easy, high-value first step: a folder picker (reuse the
+     directory-access flow), a file tree, and a Markdown editor/preview pane. Pure local, no
+     protocol. Could ship well before any server work.
+  2. **Markdown note *syncing*** later, ideally tied into the bundled server vision below. Since
+     Markdown is file-based, the natural sync is **file sync (WebDAV/S3/folder replication)**, not
+     CalDAV — the notes live as `.md` files, so any file-sync transport works and interops with
+     other Markdown tools.
+- **Interop reference — Obsidian.** Since the audience overlaps with Obsidian users, worth
+  designing so a notes folder can double as (or sit next to) an Obsidian vault:
+  - **Obsidian Self-hosted LiveSync** (community plugin, vrtmrz): syncs a vault via **CouchDB
+    replication** (documents + revisions, not file diffs), near-real-time (~1-2s), optional
+    **P2P over WebRTC** (no server), and **end-to-end encrypted** with a passphrase (server never
+    sees plaintext). Heavier backend (CouchDB) but the gold standard for self-hosted Obsidian sync.
+  - **Remotely Save** (Obsidian plugin): simpler file-based sync over **WebDAV/S3/Dropbox** — closer
+    to what our own server could expose, and less infrastructure than CouchDB.
+- **Fit with the bundled server (below):** when we build the embedded server, adding a Markdown
+  notes surface is attractive — either (a) serve the notes folder over **WebDAV** so Obsidian
+  (Remotely Save) and mobile file-sync clients can reach it, or (b) go further and speak CouchDB
+  replication for true Obsidian-LiveSync interop (bigger lift). Decision deferred; v1 is the
+  local folder-backed Notes tab, sync comes with the server.
+- Sources captured: Obsidian Self-hosted LiveSync (GitHub vrtmrz/obsidian-livesync), Remotely Save.
+
 ## Bundled CalDAV server ("self-contained" variant) — THE headline goal
 - Product vision: a plug-and-play replacement for Google/Apple/Microsoft
   calendar-tasks-contacts for people with NO self-hosting experience, on the computer

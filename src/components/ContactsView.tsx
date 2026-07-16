@@ -9,6 +9,9 @@ interface Props {
   selectedContactId: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
+  onImport: () => void;
+  onFindDuplicates: () => void;
+  duplicateCount: number;
   onToggleFavorite: (c: Contact) => void;
 }
 
@@ -26,7 +29,7 @@ const avatarStyle = {
   flexShrink: 0, marginTop: 1
 } as const;
 
-export default function ContactsView({ contacts, filter, labelColors, selectedContactId, onSelect, onCreate, onToggleFavorite }: Props) {
+export default function ContactsView({ contacts, filter, labelColors, selectedContactId, onSelect, onCreate, onImport, onFindDuplicates, duplicateCount, onToggleFavorite }: Props) {
   const [search, setSearch] = useState("");
 
   const visible = useMemo(() => {
@@ -41,7 +44,8 @@ export default function ContactsView({ contacts, filter, labelColors, selectedCo
         c.org.toLowerCase().includes(q) ||
         c.emails.toLowerCase().includes(q) ||
         c.phones.toLowerCase().includes(q) ||
-        c.categories.toLowerCase().includes(q)
+        c.categories.toLowerCase().includes(q) ||
+        (c.group_labels || "").toLowerCase().includes(q)
       );
     }
     return [...base].sort((a, b) => (a.fn || "").localeCompare(b.fn || ""));
@@ -57,6 +61,12 @@ export default function ContactsView({ contacts, filter, labelColors, selectedCo
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
+        {duplicateCount > 0 && (
+          <button onClick={onFindDuplicates} title="Review possible duplicate contacts">
+            Merge duplicates ({duplicateCount})
+          </button>
+        )}
+        <button onClick={onImport}>Import vCard…</button>
         <button className="primary" onClick={onCreate}>+ New contact</button>
       </div>
       <div className="task-table">

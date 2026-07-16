@@ -21,6 +21,8 @@ interface Props {
   onCreateBook: (name: string) => void;
   labelColors: LabelColors;
   onSetLabelColor: (label: string, color: string | null) => void;
+  onDisconnectBook: (b: AddressBook) => void;
+  onDeleteBook: (b: AddressBook) => void;
   onSync: () => void;
   syncing: boolean;
   onOpenSettings: () => void;
@@ -30,11 +32,12 @@ interface Props {
 
 export default function ContactsSidebar({
   addressBooks, contacts, filter, onSelect, onCreateBook, labelColors, onSetLabelColor,
-  onSync, syncing, onOpenSettings, collapsed, onToggleCollapsed
+  onDisconnectBook, onDeleteBook, onSync, syncing, onOpenSettings, collapsed, onToggleCollapsed
 }: Props) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [labelMenu, setLabelMenu] = useState<{ x: number; y: number; label: string } | null>(null);
+  const [bookMenu, setBookMenu] = useState<{ x: number; y: number; book: AddressBook } | null>(null);
 
   if (collapsed) {
     return (
@@ -86,6 +89,8 @@ export default function ContactsSidebar({
             className={`sidebar-item ${active({ kind: "book", value: b.id }) ? "active" : ""}`}
             style={{ "--accent": b.color } as any}
             onClick={() => onSelect({ kind: "book", value: b.id })}
+            onContextMenu={(e) => { e.preventDefault(); setBookMenu({ x: e.clientX, y: e.clientY, book: b }); }}
+            title={b.carddav_addressbook_url ? "Right-click to disconnect or delete" : "Right-click to delete"}
           >
             <span className="sidebar-dot" style={{ background: b.color }} />
             <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -142,6 +147,20 @@ export default function ContactsSidebar({
           items={[
             ...PALETTE.map((p) => ({ label: `● ${p.name}`, onClick: () => onSetLabelColor(labelMenu.label, p.color) })),
             { label: "No color", onClick: () => onSetLabelColor(labelMenu.label, null) }
+          ]}
+        />
+      )}
+
+      {bookMenu && (
+        <ContextMenu
+          x={bookMenu.x}
+          y={bookMenu.y}
+          onClose={() => setBookMenu(null)}
+          items={[
+            ...(bookMenu.book.carddav_addressbook_url
+              ? [{ label: "Disconnect from CardDAV", onClick: () => onDisconnectBook(bookMenu.book) }]
+              : []),
+            { label: "Delete address book", danger: true, onClick: () => onDeleteBook(bookMenu.book) }
           ]}
         />
       )}

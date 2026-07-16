@@ -10,9 +10,11 @@ import TodayPane from "./components/TodayPane";
 import ContactsRail from "./components/ContactsRail";
 import EventDetailPanel from "./components/EventDetailPanel";
 import ContactsView from "./components/ContactsView";
+import ImportVCardModal from "./components/ImportVCardModal";
 import ContactsSidebar from "./components/ContactsSidebar";
 import ContactDetailPanel from "./components/ContactDetailPanel";
-import { ContactFilter, LabelColors, toggleFavoriteCategories } from "./contactUtils";
+import { ContactFilter, LabelColors, toggleFavoriteCategories, findDuplicateClusters } from "./contactUtils";
+import MergeDuplicatesView from "./components/MergeDuplicatesView";
 import { Task, TaskList, CaldavAccountPublic, CalendarEvent, Contact, AddressBook } from "./types";
 import { selectWidth } from "./selectWidth";
 
@@ -56,6 +58,8 @@ export default function App() {
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [contactFilter, setContactFilter] = useState<ContactFilter>({ kind: "all" });
   const [labelColors, setLabelColors] = useState<LabelColors>({});
+  const [contactsMode, setContactsMode] = useState<"list" | "duplicates">("list");
+  const [dismissedDupPairs, setDismissedDupPairs] = useState<Set<string>>(new Set());
   // Experimental: collapses the Today pane + detail panel column, and/or the
   // sidebar, so the calendar/task table can use the freed width.
   const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem("railCollapsed") === "1");
@@ -83,10 +87,32 @@ export default function App() {
     setSelectedContactId(id);
     if (id) setRailCollapsed(false);
   }
+
+  // One-level undo. Each mutating task action records an inverse closure here,
+  // overwriting any previous one (single level, as requested). Ctrl/Cmd+Z runs
+  // it. Closures only issue the reversing IPC calls; undoLast handles the
+  // refresh, selection cleanup, and sync scheduling.
+  const lastActionRef = React.useRef<null | (() => Promise<void>)>(null);
+  async function undoLast() {
+    const action = lastActionRef.current;
+    if (!action) return;
+    lastActionRef.current = null; // consume — one level only
+    await action();
+    const fresh = await window.api.tasks.all();
+    setTasks(fresh);
+    if (selectedTaskId && !fresh.some((t) => t.id === selectedTaskId)) selectTask(null);
+    scheduleDirtySync();
+  }
+  // Keep a live ref so the menu's IPC listener (registered once) always calls
+  // the current undoLast closure rather than a stale first-render one.
+  const undoRef = React.useRef(undoLast);
+  undoRef.current = undoLast;
+
   const [search, setSearch] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [forceAddingList, setForceAddingList] = useState(false);
@@ -205,9 +231,29 @@ export default function App() {
   const loadLabelColors = useCallback(async () => {
     const s = (await window.api.settings?.all()) ?? {};
     try { setLabelColors(JSON.parse(s.contactLabelColors || "{}")); } catch { setLabelColors({}); }
+    try { const a = JSON.parse(s.dismissedDupPairs || "[]"); setDismissedDupPairs(new Set(Array.isArray(a) ? a : [])); } catch { setDismissedDupPairs(new Set()); }
   }, []);
 
   useEffect(() => { loadLists(); loadTasks(); loadAccounts(); loadEvents(); loadContacts(); loadAddressBooks(); loadLabelColors(); }, [loadLists, loadTasks, loadAccounts, loadEvents, loadContacts, loadAddressBooks, loadLabelColors]);
+
+  const duplicateClusters = useMemo(
+    () => findDuplicateClusters(contacts.filter((c) => !c.deleted), dismissedDupPairs),
+    [contacts, dismissedDupPairs]
+  );
+
+  async function dismissDupPairs(pairKeys: string[]) {
+    const next = new Set(dismissedDupPairs);
+    for (const k of pairKeys) next.add(k);
+    setDismissedDupPairs(next);
+    await window.api.settings?.set("dismissedDupPairs", JSON.stringify([...next]));
+  }
+
+  async function mergeContacts(keeperId: string, loserIds: string[], patch: Partial<Contact>) {
+    await window.api.contacts?.merge(keeperId, loserIds, patch);
+    if (selectedContactId && loserIds.includes(selectedContactId)) selectContact(null);
+    await loadContacts();
+    scheduleDirtySync();
+  }
 
   useEffect(() => {
     const offs = [
@@ -215,6 +261,7 @@ export default function App() {
       window.api.on("shortcut:new-list", () => setForceAddingList(true)),
       window.api.on("shortcut:focus-search", () => searchInputRef.current?.focus()),
       window.api.on("shortcut:sync-now", () => runSync()),
+      window.api.on("shortcut:undo", () => undoRef.current()),
       window.api.on("shortcut:open-settings", () => setShowSettings(true)),
       window.api.on("shortcut:open-about", () => setShowAbout(true)),
       window.api.on("notify:select-task", (id: string) => { setScope("all"); setMainView("tasks"); selectTask(id); }),
@@ -227,7 +274,12 @@ export default function App() {
     function onKeyDown(e: KeyboardEvent) {
       const tag = (document.activeElement?.tagName || "").toLowerCase();
       const typing = tag === "input" || tag === "textarea" || tag === "select";
-      if (typing) return;
+      if (typing) return; // let the OS handle native text-field undo while editing
+      if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z") && !e.shiftKey) {
+        e.preventDefault();
+        undoLast();
+        return;
+      }
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selectedTaskId) { e.preventDefault(); deleteTask(selectedTaskId); }
       }
@@ -408,6 +460,22 @@ export default function App() {
     await loadAddressBooks();
   }
 
+  async function disconnectBook(b: AddressBook) {
+    if (!window.confirm(`Disconnect "${b.name}" from CardDAV?\n\nIt stops syncing but its contacts stay on this computer. Nothing is deleted on the server.`)) return;
+    await window.api.addressbooks?.unlink(b.id);
+    await loadAddressBooks();
+    await loadContacts();
+  }
+
+  async function deleteBook(b: AddressBook) {
+    const n = contacts.filter((c) => c.address_book_id === b.id && !c.deleted).length;
+    if (!window.confirm(`Delete "${b.name}" and its ${n} local contact(s)?\n\nThis only removes them from this computer — contacts on the server are not deleted.`)) return;
+    await window.api.addressbooks?.delete(b.id);
+    if (contactFilter.kind === "book" && contactFilter.value === b.id) setContactFilter({ kind: "all" });
+    await loadAddressBooks();
+    await loadContacts();
+  }
+
   async function setLabelColor(label: string, color: string | null) {
     const next = { ...labelColors };
     if (color) next[label] = color; else delete next[label];
@@ -453,6 +521,7 @@ export default function App() {
     await loadTasks();
     selectTask(t.id);
     scheduleDirtySync();
+    lastActionRef.current = async () => { await window.api.tasks.delete(t.id, true); };
   }
 
   /** Drop `draggedId` in front of `targetId` among its visible siblings and
@@ -464,6 +533,7 @@ export default function App() {
     if (!dragged || !target || dragged.id === target.id) return;
     if ((dragged.parent_id ?? null) !== (target.parent_id ?? null)) return; // siblings only
     const siblings = visibleTasks.filter((t) => (t.parent_id ?? null) === (dragged.parent_id ?? null));
+    const beforeOrders = siblings.map((t) => ({ id: t.id, sort_order: t.sort_order }));
     const ids = siblings.map((t) => t.id).filter((id) => id !== draggedId);
     ids.splice(ids.indexOf(targetId), 0, draggedId);
     await Promise.all(
@@ -473,6 +543,9 @@ export default function App() {
       })
     );
     await loadTasks();
+    lastActionRef.current = async () => {
+      for (const s of beforeOrders) await window.api.tasks.update(s.id, { sort_order: s.sort_order } as Partial<Task>);
+    };
   }
 
   /** Pushes the due date forward. Timed tasks keep their clock time. */
@@ -493,9 +566,11 @@ export default function App() {
       const pad = (n: number) => String(n).padStart(2, "0");
       due = `${base.getFullYear()}-${pad(base.getMonth() + 1)}-${pad(base.getDate())}`;
     }
+    const beforeDue = { due_date: t.due_date } as Partial<Task>;
     await window.api.tasks.update(id, { due_date: due } as Partial<Task>);
     await loadTasks();
     scheduleDirtySync();
+    lastActionRef.current = async () => { await window.api.tasks.update(id, beforeDue); };
   }
 
   async function createTaskInScope() {
@@ -505,33 +580,53 @@ export default function App() {
     await loadTasks();
     selectTask(t.id);
     scheduleDirtySync();
+    lastActionRef.current = async () => { await window.api.tasks.delete(t.id, true); };
   }
 
   async function updateTask(id: string, patch: Partial<Task>) {
+    const prev = tasks.find((t) => t.id === id);
+    const before = prev
+      ? (Object.fromEntries(Object.keys(patch).map((k) => [k, (prev as any)[k]])) as Partial<Task>)
+      : null;
     await window.api.tasks.update(id, patch);
     await loadTasks();
     scheduleDirtySync();
+    if (before) lastActionRef.current = async () => { await window.api.tasks.update(id, before); };
   }
 
   async function toggleComplete(id: string) {
+    const prev = tasks.find((t) => t.id === id);
+    // Capture every field toggleComplete might change (a recurring task
+    // reschedules instead of completing, moving due/start dates).
+    const before = prev
+      ? ({ completed: prev.completed, completed_at: prev.completed_at, due_date: prev.due_date, start_date: prev.start_date } as Partial<Task>)
+      : null;
     await window.api.tasks.toggleComplete(id);
     await loadTasks();
     scheduleDirtySync();
+    if (before) lastActionRef.current = async () => { await window.api.tasks.update(id, before); };
   }
 
   async function deleteTask(id: string) {
+    // Delete cascades to direct subtasks (DB: id OR parent_id = id). Capture
+    // the affected (currently-visible) ids so undo can un-delete them all.
+    const affectedIds = tasks.filter((t) => t.id === id || t.parent_id === id).map((t) => t.id);
     await window.api.tasks.delete(id);
     if (selectedTaskId === id) selectTask(null);
     await loadTasks();
     scheduleDirtySync();
+    lastActionRef.current = async () => {
+      for (const tid of affectedIds) await window.api.tasks.update(tid, { deleted: 0 } as Partial<Task>);
+    };
   }
 
   async function addSubtask(parentId: string, title: string) {
     const parent = tasks.find((t) => t.id === parentId);
     if (!parent) return;
-    await window.api.tasks.create({ list_id: parent.list_id, parent_id: parentId, title });
+    const t = await window.api.tasks.create({ list_id: parent.list_id, parent_id: parentId, title });
     await loadTasks();
     scheduleDirtySync();
+    lastActionRef.current = async () => { await window.api.tasks.delete(t.id, true); };
   }
 
   async function createList(name: string) {
@@ -664,6 +759,8 @@ export default function App() {
           onCreateBook={createAddressBook}
           labelColors={labelColors}
           onSetLabelColor={setLabelColor}
+          onDisconnectBook={disconnectBook}
+          onDeleteBook={deleteBook}
           onSync={() => runSync()}
           syncing={syncing}
           onOpenSettings={() => setShowSettings(true)}
@@ -723,6 +820,14 @@ export default function App() {
             onUpdateTask={updateTask}
           />
         ) : mainView === "contacts" ? (
+          contactsMode === "duplicates" ? (
+            <MergeDuplicatesView
+              clusters={duplicateClusters}
+              onMerge={mergeContacts}
+              onDismiss={dismissDupPairs}
+              onBack={() => setContactsMode("list")}
+            />
+          ) : (
           <ContactsView
             contacts={contacts}
             filter={contactFilter}
@@ -730,8 +835,12 @@ export default function App() {
             selectedContactId={selectedContactId}
             onSelect={selectContact}
             onCreate={createContact}
+            onImport={() => setShowImport(true)}
+            onFindDuplicates={() => setContactsMode("duplicates")}
+            duplicateCount={duplicateClusters.length}
             onToggleFavorite={toggleFavorite}
           />
+          )
         ) : (
         <>
         <div className="toolbar">
@@ -911,10 +1020,21 @@ export default function App() {
           onClose={() => setShowSettings(false)}
           onListsChanged={() => { loadLists(); loadTasks(); loadAccounts(); loadAddressBooks(); loadContacts(); }}
           onSyncAccount={syncAccountNow}
+          onReviewDuplicates={() => { setShowSettings(false); setMainView("contacts"); setContactsMode("duplicates"); }}
+          onImportVCard={() => { setShowSettings(false); setMainView("contacts"); setShowImport(true); }}
         />
       )}
 
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
+
+      {showImport && (
+        <ImportVCardModal
+          addressBooks={addressBooks}
+          defaultBookId={contactFilter.kind === "book" ? contactFilter.value : (addressBooks.find((b) => b.carddav_addressbook_url)?.id ?? addressBooks[0]?.id ?? null)}
+          onClose={() => setShowImport(false)}
+          onImported={() => { loadContacts(); scheduleDirtySync(); }}
+        />
+      )}
     </div>
   );
 }

@@ -27,9 +27,11 @@ interface Props {
   onClose: () => void;
   onListsChanged: () => void;
   onSyncAccount: (accountId: string) => Promise<{ listId: string; pulled: number; pushed: number; errors: string[] }[]>;
+  onReviewDuplicates: () => void;
+  onImportVCard: () => void;
 }
 
-export default function SettingsModal({ lists, addressBooks, onClose, onListsChanged, onSyncAccount }: Props) {
+export default function SettingsModal({ lists, addressBooks, onClose, onListsChanged, onSyncAccount, onReviewDuplicates, onImportVCard }: Props) {
   const [accounts, setAccounts] = useState<CaldavAccountPublic[]>([]);
   const [label, setLabel] = useState("");
   const [serverUrl, setServerUrl] = useState("");
@@ -308,20 +310,29 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
     setBusy(false);
   }
 
-  /** One-shot cleanup of duplicate lists / address books / contacts already in
-   *  the database (fallout from earlier connect/disconnect cycles). Keeps one
-   *  synced copy per collection and renames extras "(local)"; never deletes
-   *  tasks. */
-  async function cleanUpDuplicates() {
-    if (!window.api.maintenance) { setTestMsg("Cleanup not available in this build."); return; }
+  /** Repairs duplicate *collections* left over from connect/disconnect cycles:
+   *  consolidates lists and address books that point at the same remote, and
+   *  removes exact-duplicate contact rows and group-card phantoms. Previews the
+   *  changes first and asks for confirmation. Never deletes tasks, and never
+   *  deletes contact data on the server (heuristic contact merging lives in the
+   *  manual "Merge duplicates" review instead). */
+  async function repairDuplicates() {
+    if (!window.api.maintenance) { setTestMsg("Repair not available in this build."); return; }
     setBusy(true);
     setTestMsg(null);
     try {
-      const r = await window.api.maintenance.dedupe();
+      const preview = await window.api.maintenance.dedupe(true); // dry run — rolls back
+      const total = preview.listsMerged + preview.listsRenamedLocal + preview.booksMerged + preview.booksRenamedLocal + preview.contactsRemoved;
+      if (total === 0) { setTestMsg("No duplicate lists or address books found."); return; }
+      const ok = window.confirm(
+        "Repair these duplicates?\n\n• " + preview.details.join("\n• ") +
+        "\n\nYour tasks and your contacts on the server are not deleted."
+      );
+      if (!ok) return;
+      const r = await window.api.maintenance.dedupe(false); // apply
       onListsChanged();
       await refresh();
-      const changed = r.listsRenamedLocal + r.booksRenamedLocal + r.contactsRemoved;
-      setTestMsg(changed === 0 ? "No duplicates found." : r.details.join(" "));
+      setTestMsg(r.details.join(" "));
     } catch (err: any) {
       setTestMsg(err?.message || String(err));
     } finally {
@@ -503,13 +514,6 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
                 </span>
               )}
               <button
-                disabled={busy}
-                onClick={cleanUpDuplicates}
-                title="Merge duplicate lists, address books, and contacts left over from earlier connect/disconnect cycles. Keeps one synced copy and renames extras '(local)'. Never deletes your tasks."
-              >
-                Clean up duplicates
-              </button>
-              <button
                 className="primary"
                 disabled={busy || pendingCount === 0}
                 onClick={saveAllChanges}
@@ -531,6 +535,23 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
           />
           Allow self-signed certificates (self-hosted servers on your LAN)
         </label>
+
+        <h3 style={{ marginTop: 18 }}>Contacts &amp; maintenance</h3>
+        <div className="settings-tools">
+          <button
+            disabled={busy}
+            onClick={repairDuplicates}
+            title="Consolidates duplicate task lists and address books left over from connect/disconnect cycles, and removes exact-duplicate contact rows. Shows a preview and asks before applying. Never deletes tasks or your contacts on the server."
+          >
+            Repair duplicate lists &amp; books
+          </button>
+          <button onClick={onReviewDuplicates} title="Review possible duplicate contacts and merge them manually — this is where contacts are combined.">
+            Merge duplicates…
+          </button>
+          <button onClick={onImportVCard} title="Import contacts from a .vcf file, optionally adding a label to all of them.">
+            Import from vCard…
+          </button>
+        </div>
 
         <h3 style={{ marginTop: 18 }}>Add account</h3>
         <div className="form-grid">

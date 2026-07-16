@@ -9,15 +9,18 @@ import {
   addressBookCreate,
   addressBookUpdate,
   davUrlKey,
+  contactsAll,
   contactsByBook,
   contactsByBookWithUid,
   contactCreate,
   contactUpdate,
   contactDelete,
   contactsPruneMissing,
+  contactGroupUpsert,
+  contactGroupsPruneMissing,
   getDb
 } from "./db.js";
-import { parseVCard, contactToVCard, displayName, ParsedContact } from "./vcard.js";
+import { parseVCard, parseGroupCard, contactToVCard, displayName, ParsedContact } from "./vcard.js";
 // Reuse the CalDAV account plumbing: same server credentials + logging.
 import { decryptPassword, syncLog } from "./caldav.js";
 
@@ -190,8 +193,35 @@ async function syncAddressBook(client: Client, book: AddressBook): Promise<Conta
 
     const remoteByUid = new Map<string, { url: string; etag: string; data: string; parsed: ParsedContact }>();
     const remoteUids = new Set<string>();
+    const groupRemoteUids = new Set<string>();
+    let groupsSeen = 0;
+    const db0 = getDb();
     for (const obj of objects) {
       const data = obj.data || "";
+      // Synology/DAVx5 store labels ("DP21", "wedding") as separate group cards
+      // that list members by UID. Divert those into contact_groups so their
+      // membership becomes labels, instead of importing them as phantom
+      // "contacts" (which is why those labels showed up empty).
+      const group = parseGroupCard(data);
+      if (group) {
+        contactGroupUpsert({
+          address_book_id: book.id,
+          name: group.name,
+          carddav_uid: group.uid,
+          carddav_href: obj.url,
+          carddav_etag: obj.etag || "",
+          member_uids: group.memberUids,
+          raw_vcard: data
+        });
+        if (group.uid) {
+          groupRemoteUids.add(group.uid);
+          // Clean up a phantom contact row imported from this group card by an
+          // earlier (pre-fix) build.
+          db0.prepare(`DELETE FROM contacts WHERE address_book_id = ? AND carddav_uid = ?`).run(book.id, group.uid);
+        }
+        groupsSeen++;
+        continue;
+      }
       const parsed = parseVCard(data);
       if (!parsed || !parsed.uid) continue;
       remoteUids.add(parsed.uid);
@@ -318,11 +348,128 @@ async function syncAddressBook(client: Client, book: AddressBook): Promise<Conta
     }
 
     contactsPruneMissing(book.id, remoteUids);
-    syncLog(`carddav: synced book "${book.name}" — pulled ${result.pulled}, pushed ${result.pushed}`);
+    contactGroupsPruneMissing(book.id, groupRemoteUids);
+    syncLog(`carddav: synced book "${book.name}" — pulled ${result.pulled}, pushed ${result.pushed}, ${groupsSeen} group card(s) → labels`);
   } catch (err: any) {
     syncLog(`carddav sync FAILED for book "${book.name}": ${err?.message || err}`);
     result.errors.push(err?.message || String(err));
   }
 
   return result;
+}
+
+// ---------- vCard file import (workaround for labels Synology won't export) ----------
+
+/** Split a .vcf file (which may contain many cards) into individual vCard
+ *  blocks. */
+function splitVCards(text: string): string[] {
+  const out: string[] = [];
+  const re = /BEGIN:VCARD[\s\S]*?END:VCARD/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) out.push(m[0]);
+  return out;
+}
+
+const normKey = (s: string) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+
+/** Normalized display name for matching (prefers FN, falls back to first+last). */
+function nameKeyParsed(p: ParsedContact): string {
+  return normKey(p.fn || `${p.first_name} ${p.last_name}`);
+}
+function nameKeyContact(c: Contact): string {
+  return normKey(c.fn || `${c.first_name} ${c.last_name}`);
+}
+
+function emailSetFromJson(json: string): Set<string> {
+  const out = new Set<string>();
+  try {
+    const arr = JSON.parse(json || "[]");
+    if (Array.isArray(arr)) for (const e of arr) { const v = normKey(e?.value); if (v) out.add(v); }
+  } catch { /* ignore */ }
+  return out;
+}
+function emailSetFromParsed(p: ParsedContact): Set<string> {
+  const out = new Set<string>();
+  for (const e of p.emails) { const v = normKey(e.value); if (v) out.add(v); }
+  return out;
+}
+function shareAny(a: Set<string>, b: Set<string>): boolean {
+  for (const x of a) if (b.has(x)) return true;
+  return false;
+}
+
+/** Union label(s) into an existing comma-separated categories string,
+ *  de-duplicated case-insensitively. Returns the new string (unchanged if the
+ *  labels were already present). */
+function addCategories(existing: string, ...toAdd: string[]): string {
+  const cur = (existing || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const seen = new Set(cur.map((s) => s.toLowerCase()));
+  for (const raw of toAdd) {
+    for (const label of (raw || "").split(",").map((s) => s.trim()).filter(Boolean)) {
+      if (!seen.has(label.toLowerCase())) { cur.push(label); seen.add(label.toLowerCase()); }
+    }
+  }
+  return cur.join(", ");
+}
+
+export interface ImportSummary {
+  total: number;        // cards read from the file (excluding group cards)
+  labeled: number;      // existing contacts that gained the label
+  matched: number;      // cards matched to an existing contact
+  created: number;      // genuinely new contacts added
+  skipped: number;      // unmatched cards, when createNew was false
+}
+
+/** Import contacts from raw .vcf text. Matches each card to an existing contact
+ *  by CardDAV UID, then by (same name + shared email), so re-importing the same
+ *  people does not create duplicates -- it just merges. A non-empty `label` is
+ *  added to every matched/created contact's CATEGORIES (that's the workaround
+ *  for Synology labels that don't travel over CardDAV). Matched updates mark the
+ *  contact dirty, so the label rides up to the server on the next sync. */
+export function importVCards(text: string, opts: { label: string; bookId: string; createNew: boolean }): ImportSummary {
+  const summary: ImportSummary = { total: 0, labeled: 0, matched: 0, created: 0, skipped: 0 };
+  const label = (opts.label || "").trim();
+
+  const existing = contactsAll();
+  const byUid = new Map<string, Contact>();
+  for (const c of existing) if (c.carddav_uid) byUid.set(c.carddav_uid, c);
+
+  const findMatch = (p: ParsedContact): Contact | undefined => {
+    if (p.uid && byUid.has(p.uid)) return byUid.get(p.uid);
+    const nk = nameKeyParsed(p);
+    if (!nk) return undefined;
+    const pEmails = emailSetFromParsed(p);
+    if (pEmails.size === 0) return undefined; // need an email to match confidently
+    for (const c of existing) {
+      if (nameKeyContact(c) !== nk) continue;
+      if (shareAny(pEmails, emailSetFromJson(c.emails))) return c;
+    }
+    return undefined;
+  };
+
+  for (const block of splitVCards(text)) {
+    if (parseGroupCard(block)) continue; // ignore group cards
+    const p = parseVCard(block);
+    if (!p) continue;
+    summary.total++;
+    const match = findMatch(p);
+    if (match) {
+      summary.matched++;
+      const next = addCategories(match.categories, label, p.categories);
+      if (next !== match.categories) { contactUpdate(match.id, { categories: next }); summary.labeled++; }
+    } else if (opts.createNew) {
+      const created = contactCreate({
+        address_book_id: opts.bookId,
+        ...parsedToFields(p),
+        categories: addCategories(p.categories, label),
+        raw_vcard: block
+      });
+      summary.created++;
+      if (label) summary.labeled++;
+      existing.push(created);
+    } else {
+      summary.skipped++;
+    }
+  }
+  return summary;
 }

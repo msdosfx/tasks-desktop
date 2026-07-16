@@ -139,6 +139,9 @@ export interface Contact {
   sequence: number;
   created_at: string;
   updated_at: string;
+  /** Labels inherited from CardDAV group cards (Synology labels), decorated by
+   *  the main process; merged with this contact's own CATEGORIES for display. */
+  group_labels?: string;
 }
 
 export interface DiscoveredAddressBook {
@@ -209,7 +212,7 @@ declare global {
       };
       /** Absent in the Thunderbird add-on shim -- always optional-chain. */
       maintenance?: {
-        dedupe: () => Promise<{
+        dedupe: (dryRun?: boolean) => Promise<{
           listsMerged: number; listsRenamedLocal: number;
           booksMerged: number; booksRenamedLocal: number;
           contactsRemoved: number; details: string[];
@@ -222,6 +225,10 @@ declare global {
         create: (input: Partial<Contact> & { address_book_id: string }) => Promise<Contact>;
         update: (id: string, patch: Partial<Contact>) => Promise<Contact>;
         delete: (id: string, hard?: boolean) => Promise<void>;
+        import: (opts: { label: string; bookId: string; createNew: boolean }) => Promise<{
+          canceled?: boolean; total?: number; labeled?: number; matched?: number; created?: number; skipped?: number;
+        }>;
+        merge: (keeperId: string, loserIds: string[], patch: Partial<Contact>) => Promise<Contact>;
       };
       /** Absent in the Thunderbird add-on shim -- always optional-chain. */
       reminders?: {

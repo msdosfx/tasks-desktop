@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, Notification, Tray, nativeImage, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, Notification, Tray, nativeImage, shell, dialog } from "electron";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
@@ -38,14 +38,16 @@ import {
   addressBookUpdate,
   addressBookDelete,
   contactsAll,
+  contactsAllForUi,
   contactsByBook,
   contactCreate,
   contactUpdate,
   contactDelete,
+  contactsMerge,
   dedupeDatabase
 } from "./db.js";
 import { testConnection, discoverCalendars, linkListToCalendar, unlinkList, syncAccount, createServerCalendar, encryptPassword, connectCalendar } from "./caldav.js";
-import { discoverAddressBooks, linkAddressBook, unlinkAddressBook, syncAccountContacts, connectAddressBook } from "./carddav.js";
+import { discoverAddressBooks, linkAddressBook, unlinkAddressBook, syncAccountContacts, connectAddressBook, importVCards } from "./carddav.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -261,8 +263,18 @@ function buildMenu() {
     {
       label: "Edit",
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
+        {
+          // App-level undo (restores the last task action: delete, edit,
+          // complete-toggle, create, snooze, reorder). registerAccelerator is
+          // false so the renderer's focus-aware keydown owns Ctrl/Cmd+Z —
+          // that keeps native undo working inside text fields while typing.
+          // The accelerator is still shown here for discoverability, and
+          // clicking the item dispatches the same undo.
+          label: "Undo",
+          accelerator: "CmdOrCtrl+Z",
+          registerAccelerator: false,
+          click: () => mainWindow?.webContents.send("shortcut:undo")
+        },
         { type: "separator" },
         { role: "cut" },
         { role: "copy" },
@@ -381,11 +393,23 @@ function registerIpc() {
   );
   ipcMain.handle("addressbooks:unlink", (_e, bookId: string) => unlinkAddressBook(bookId));
 
-  ipcMain.handle("contacts:all", () => contactsAll());
+  ipcMain.handle("contacts:all", () => contactsAllForUi());
   ipcMain.handle("contacts:byBook", (_e, bookId: string) => contactsByBook(bookId));
   ipcMain.handle("contacts:create", (_e, input: any) => contactCreate(input));
   ipcMain.handle("contacts:update", (_e, id: string, patch: any) => contactUpdate(id, patch));
   ipcMain.handle("contacts:delete", (_e, id: string, hard?: boolean) => contactDelete(id, hard));
+  ipcMain.handle("contacts:import", async (_e, opts: { label: string; bookId: string; createNew: boolean }) => {
+    const res = await dialog.showOpenDialog({
+      title: "Import contacts from vCard",
+      filters: [{ name: "vCard", extensions: ["vcf", "vcard"] }],
+      properties: ["openFile"]
+    });
+    if (res.canceled || !res.filePaths[0]) return { canceled: true };
+    const text = fs.readFileSync(res.filePaths[0], "utf8");
+    const summary = importVCards(text, opts);
+    return { canceled: false, ...summary };
+  });
+  ipcMain.handle("contacts:merge", (_e, keeperId: string, loserIds: string[], patch: any) => contactsMerge(keeperId, loserIds, patch));
 
   ipcMain.handle("reminders:for", (_e, ownerType: "task" | "event", ownerId: string) => remindersForOwner(ownerType, ownerId));
   ipcMain.handle("reminders:create", (_e, ownerType: "task" | "event", ownerId: string, offsetMinutes: number) =>
@@ -440,7 +464,7 @@ function registerIpc() {
   ipcMain.handle("accounts:unlinkList", (_e, listId: string) => unlinkList(listId));
   // One-shot cleanup of duplicate lists / address books / contacts already in
   // the database (the http<->https reconnect fallout). Non-destructive to tasks.
-  ipcMain.handle("maintenance:dedupe", () => dedupeDatabase());
+  ipcMain.handle("maintenance:dedupe", (_e, dryRun?: boolean) => dedupeDatabase(!!dryRun));
   ipcMain.handle("accounts:createServerCalendar", async (_e, accountId: string, name: string) => {
     const account = accountsAll().find((a) => a.id === accountId);
     if (!account) throw new Error("Account not found");

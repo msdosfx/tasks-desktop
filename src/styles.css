@@ -443,17 +443,17 @@ input, textarea, select { user-select: text; }
 .calendar-pick button:disabled { opacity: .6; cursor: default; }
 .modal-close { position: absolute; top: 14px; right: 18px; cursor: pointer; color: #9aa0a6; background:none; border:none; font-size: 18px; }
 .settings-save-bar {
-  position: sticky;
-  bottom: -20px;
-  margin: 14px -20px -20px;
-  padding: 12px 20px;
-  background: #1e1f22;
+  margin: 16px -20px 0;
+  padding: 14px 20px 0;
   border-top: 1px solid #34353a;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
 }
+.settings-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-tools button { padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; border: 1px solid #34353a; background: #26272a; color: #e6e6e6; }
+.settings-tools button:disabled { opacity: .5; cursor: default; }
 .settings-save-bar button { padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; border: 1px solid #34353a; background: #26272a; color: #e6e6e6; }
 .settings-save-bar button.primary { background: #4a90d9; border-color: #4a90d9; color: #fff; font-weight: 600; }
 .settings-save-bar button.primary:hover { background: #3f7fc1; }
