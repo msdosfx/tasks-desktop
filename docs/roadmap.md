@@ -18,6 +18,27 @@
   (name, color) + small settings UI, then calendar/task-table coloring could prefer category color
   over list color when a task has one. Deferred for now — calendar view v1 uses list color only.
 
+## Export & sharing — proposed (added 2026-07-16)
+- **Contact export to `.vcf`** — export one, selected, or all contacts to a vCard file. The
+  inverse of the existing Import vCard flow; can reuse the vCard generator in
+  `electron/vcard.ts` (already builds vCards for CardDAV push) plus a save-file dialog.
+  Low lift, natural companion to import.
+- **Export contacts to a spreadsheet** — flatten contacts (name, org, title, emails, phones,
+  addresses, labels/categories, birthday, anniversary) into columns and write a `.csv` (or
+  `.xlsx`). Needs a flattening pass over the typed-value JSON columns (`emails`/`phones`/
+  `addresses` are `[{type,value}]` arrays); decide how to represent multi-value fields
+  (join, or one column per index).
+- **Share a contact** — send a single contact out, most portably as a `.vcf` (the universal
+  contact-exchange format every phone/app imports). On desktop this is essentially
+  "export one contact to vCard" + hand off to the OS (save, or attach to a `mailto:`).
+  Overlaps with the `.vcf` export above; could share one code path.
+- **Share a task list** — share a whole list with someone. Format is the open question and
+  needs a decision before building: (a) export the list to an iCalendar `.ics`
+  (`VTODO` collection) file the recipient imports, vs (b) a server-side CalDAV share/ACL if
+  Synology (or the future bundled server) supports sharing a collection with another user.
+  (a) is self-contained and works today; (b) is true collaboration but depends on server
+  support. Research needed.
+
 ## RRULE grid expansion — DONE (2026-07-11)
 - **Reversed the 2026-07-10 "decided against" call** at the user's request: not being able to see a
   recurring item anywhere but its original date was a real problem (a weekly task set up months ago
