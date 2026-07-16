@@ -14,6 +14,7 @@
     "build": "npm run build:renderer && npm run build:electron",
     "start": "npm run build && electron .",
     "package": "npm run build && electron-builder",
+    "package:exp": "npm run build && electron-builder --publish never -c.appId=com.arlis.tasksdesktop.experimental -c.productName=\"Tasks Desktop (Experimental)\" -c.win.artifactName=Tasks-Desktop-Experimental-Setup-${version}.${ext}",
     "build:addon": "vite build --config thunderbird-addon/vite.config.ts",
     "dev:addon": "vite --config thunderbird-addon/vite.config.ts"
   },
