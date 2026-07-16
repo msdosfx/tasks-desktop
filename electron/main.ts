@@ -51,6 +51,13 @@ import { discoverAddressBooks, linkAddressBook, unlinkAddressBook, syncAccountCo
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
+// The experimental build is packaged with productName "Tasks Desktop (Experimental)",
+// so electron-builder names its exe/install dir accordingly. Detect it from the exe
+// path (no build-time flag needed) so it can wear the distinct orange icon + identity,
+// the same way dev runs do — handy since it shares the stable app's database.
+const isExperimental = /experimental/i.test(app.getPath("exe"));
+// Runs that should look distinct from an installed production build (orange icon).
+const isDistinctBuild = isDev || isExperimental;
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -98,7 +105,7 @@ function createWindow() {
     // regardless of how the exe was launched (installed shortcut, portable
     // unpacked exe, or dev). Without this, Windows falls back to the generic
     // Electron icon when no matching AppUserModelID shortcut is registered.
-    icon: nativeImage.createFromPath(iconPath(isDev ? "32x32-dev.png" : "256x256.png")),
+    icon: nativeImage.createFromPath(iconPath(isDistinctBuild ? "32x32-dev.png" : "256x256.png")),
     backgroundColor: "#1e1f22",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -156,8 +163,8 @@ function setupTray() {
   try {
     // Dev/experimental runs use a distinct orange icon file (build/icons/32x32-dev.png)
     // so they're never confused with an installed production build at a glance.
-    tray = new Tray(nativeImage.createFromPath(iconPath(isDev ? "32x32-dev.png" : "32x32.png")));
-    tray.setToolTip(isDev ? "Tasks Desktop (dev)" : "Tasks Desktop");
+    tray = new Tray(nativeImage.createFromPath(iconPath(isDistinctBuild ? "32x32-dev.png" : "32x32.png")));
+    tray.setToolTip(isDev ? "Tasks Desktop (dev)" : isExperimental ? "Tasks Desktop (Experimental)" : "Tasks Desktop");
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: "Open Tasks Desktop", click: () => showMainWindow() },
       { type: "separator" },
@@ -498,7 +505,7 @@ app.whenReady().then(() => {
   // Distinct AppUserModelID in dev so a raw `electron .` run doesn't register a
   // shortcut under the packaged app's identity — that collision is what made
   // Windows show the Electron icon on the installed app's taskbar button.
-  if (process.platform === "win32") app.setAppUserModelId(isDev ? "com.arlis.tasksdesktop.dev" : "com.arlis.tasksdesktop"); // required for toasts
+  if (process.platform === "win32") app.setAppUserModelId(isDev ? "com.arlis.tasksdesktop.dev" : isExperimental ? "com.arlis.tasksdesktop.experimental" : "com.arlis.tasksdesktop"); // required for toasts; matches the experimental build's appId so its taskbar button/toasts stay separate from stable
   registerIpc();
   buildMenu();
   createWindow();
