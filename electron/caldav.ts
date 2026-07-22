@@ -27,7 +27,8 @@ import {
   eventUpsertFromRemote,
   eventsPruneMissing,
   remindersForOwner,
-  mergeRemindersFromRemote
+  mergeRemindersFromRemote,
+  accountExists
 } from "./db.js";
 import { taskToVTodo, parseVTodo, newUid, ParsedVTodo, eventToVEvent, parseVEvent, ParsedVEvent } from "./ical.js";
 
@@ -168,6 +169,11 @@ export async function discoverCalendars(account: CaldavAccount): Promise<Discove
  *  linked to this same calendar is unlinked first, so a calendar only ever
  *  points at one list at a time. */
 export function linkListToCalendar(listId: string, accountId: string, calendarUrl: string) {
+  // Same guard as linkAddressBook: a stale account id from the renderer would
+  // persist a link that every sync gate silently skips.
+  if (!accountExists(accountId)) {
+    throw new Error(`Cannot link calendar: account ${accountId} no longer exists. Reopen Settings and try again.`);
+  }
   // Match by normalized key so a calendar already linked under http:// isn't
   // treated as different from the same calendar under https:// -- otherwise
   // relinking after a scheme change leaves a stale orphan behind.
@@ -452,9 +458,37 @@ async function syncEvents(client: Client, list: TaskList) {
       } else {
         if (!local.dirty) continue;
         const remote = remoteByUid.get(local.caldav_uid);
-        const remoteEtag = remote?.etag ?? null;
-        if (remoteEtag !== local.caldav_etag) {
-          syncLog(`push skipped for dirty event "${local.title}": etag moved this round (${local.caldav_etag} vs ${remoteEtag})`);
+        if (!remote) {
+          // The object is gone from the server. The old code compared a null
+          // remote etag against the stored one, never matched, and skipped --
+          // on this sync and every future one, wedging the edit forever (this
+          // is what stranded "pork delivery"). eventsPruneMissing won't clear
+          // it either, since that deliberately skips dirty rows. Re-create it
+          // under the same UID so the local edit survives.
+          const offsets = remindersForOwner("event", local.id).map((r) => r.offset_minutes);
+          const { ics } = eventToVEvent(local, local.caldav_uid, offsets);
+          const filename = `${local.caldav_uid}.ics`;
+          try {
+            const created = await client.createCalendarObject({
+              calendar: { url: calendarUrl } as any,
+              filename,
+              iCalString: ics
+            });
+            const href = created.url || `${calendarUrl}${filename}`;
+            const etag = created.headers?.get?.("etag") || null;
+            eventUpdate(local.id, { caldav_href: href, caldav_etag: etag } as Partial<CalendarEvent>);
+            if (!etag) needEtagRefresh.push({ id: local.id, href, title: local.title });
+            remoteUids.add(local.caldav_uid);
+            syncLog(`re-created missing event "${local.title}" (${local.caldav_uid}) to unwedge a dirty edit`);
+            pushed++;
+          } catch (err: any) {
+            syncLog(`re-create FAILED for missing event "${local.title}": ${err?.message || err}`);
+          }
+          continue;
+        }
+        if (remote.etag !== local.caldav_etag) {
+          // Genuine remote change; the pull phase already reconciled content.
+          syncLog(`push skipped for dirty event "${local.title}": etag moved this round (${local.caldav_etag} vs ${remote.etag})`);
           continue;
         }
         const offsets = remindersForOwner("event", local.id).map((r) => r.offset_minutes);
@@ -675,10 +709,37 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
         // pending local edits with stale data.
         if (!local.dirty) continue;
         const remote = remoteByUid.get(local.caldav_uid);
-        const remoteEtag = remote?.etag ?? null;
-        if (remoteEtag !== local.caldav_etag) {
+        if (!remote) {
+          // Gone from the server. See the matching comment in the event push:
+          // comparing a null remote etag skipped this row on every future sync,
+          // and pruneMissing skips dirty rows, so the edit could never escape.
+          const offsets = remindersForOwner("task", local.id).map((r) => r.offset_minutes);
+          const { ics } = taskToVTodo(local, local.caldav_uid, offsets);
+          const filename = `${local.caldav_uid}.ics`;
+          try {
+            const created = await client.createCalendarObject({
+              calendar: { url: calendarUrl } as any,
+              filename,
+              iCalString: ics
+            });
+            const href = created.url || `${calendarUrl}${filename}`;
+            const etag = created.headers?.get?.("etag") || null;
+            taskUpdate(local.id, { caldav_href: href, caldav_etag: etag } as Partial<Task>);
+            if (!etag) needEtagRefresh.push({ id: local.id, href, title: local.title });
+            // No remoteUids bookkeeping here: unlike events, the task path has
+            // no prune step, so there is no set that would mistake this
+            // just-created object for one deleted on the server.
+            syncLog(`re-created missing "${local.title}" (${local.caldav_uid}) to unwedge a dirty edit`);
+            result.pushed++;
+          } catch (err: any) {
+            syncLog(`re-create FAILED for missing "${local.title}": ${err?.message || err}`);
+            result.errors.push(`Re-create failed for "${local.title}": ${err?.message || err}`);
+          }
+          continue;
+        }
+        if (remote.etag !== local.caldav_etag) {
           // Real content conflicts were already handled in the pull phase.
-          syncLog(`push skipped for dirty "${local.title}": etag moved this round (${local.caldav_etag} vs ${remoteEtag})`);
+          syncLog(`push skipped for dirty "${local.title}": etag moved this round (${local.caldav_etag} vs ${remote.etag})`);
           continue;
         }
         const offsets = remindersForOwner("task", local.id).map((r) => r.offset_minutes);

@@ -1035,6 +1035,61 @@ export function accountDelete(id: string) {
   db.prepare(`DELETE FROM caldav_accounts WHERE id = ?`).run(id);
 }
 
+/** True when this account id resolves to a real row. Link paths validate with
+ *  this: the renderer can hold a stale accounts array (account deleted and
+ *  re-added while a modal was open), and persisting its dead id silently
+ *  detaches the list/book from sync with nothing logged anywhere. */
+export function accountExists(id: string): boolean {
+  return !!getDb().prepare(`SELECT 1 FROM caldav_accounts WHERE id = ?`).get(id);
+}
+
+/** Lists / address books whose dav account id no longer resolves. Such a row
+ *  still looks linked in the UI but is skipped by every sync gate, so it fails
+ *  completely silently -- this is the check that makes it visible. */
+export function davOrphanedLinks(): { lists: TaskList[]; books: AddressBook[] } {
+  const db = getDb();
+  const lists = db
+    .prepare(`SELECT * FROM lists WHERE caldav_account_id IS NOT NULL
+              AND caldav_account_id NOT IN (SELECT id FROM caldav_accounts)`)
+    .all() as unknown as TaskList[];
+  const books = db
+    .prepare(`SELECT * FROM address_books WHERE carddav_account_id IS NOT NULL
+              AND carddav_account_id NOT IN (SELECT id FROM caldav_accounts)`)
+    .all() as unknown as AddressBook[];
+  return { lists, books };
+}
+
+/** Re-point orphaned links at the live account when there is exactly one, so a
+ *  stale id heals itself instead of silently killing sync. With 0 or 2+
+ *  accounts the correct target is ambiguous, so they are only reported.
+ *  Returns log lines for the caller to write (db.ts must not import syncLog). */
+export function davRepairOrphanedLinks(): string[] {
+  const { lists, books } = davOrphanedLinks();
+  if (!lists.length && !books.length) return [];
+
+  const out: string[] = [];
+  const accounts = accountsAll();
+  for (const l of lists) out.push(`orphaned list "${l.name}" -> missing account ${l.caldav_account_id}`);
+  for (const b of books) out.push(`orphaned address book "${b.name}" -> missing account ${b.carddav_account_id}`);
+
+  if (accounts.length !== 1) {
+    out.push(`NOT repairing automatically: ${accounts.length} accounts present, target is ambiguous`);
+    return out;
+  }
+
+  const db = getDb();
+  const target = accounts[0].id;
+  for (const l of lists) {
+    db.prepare(`UPDATE lists SET caldav_account_id = ? WHERE id = ?`).run(target, l.id);
+    out.push(`repaired list "${l.name}" -> account ${target}`);
+  }
+  for (const b of books) {
+    db.prepare(`UPDATE address_books SET carddav_account_id = ? WHERE id = ?`).run(target, b.id);
+    out.push(`repaired address book "${b.name}" -> account ${target}`);
+  }
+  return out;
+}
+
 // ---------- Settings ----------
 export function settingsAll(): Record<string, string> {
   const rows = getDb().prepare(`SELECT key, value FROM settings`).all() as { key: string; value: string }[];

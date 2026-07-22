@@ -18,6 +18,7 @@ import {
   contactsPruneMissing,
   contactGroupUpsert,
   contactGroupsPruneMissing,
+  accountExists,
   getDb
 } from "./db.js";
 import { parseVCard, parseGroupCard, contactToVCard, displayName, ParsedContact } from "./vcard.js";
@@ -72,6 +73,12 @@ export async function discoverAddressBooks(account: CaldavAccount): Promise<Disc
 /** Link a local address book to a discovered remote one (unlinking any other
  *  local book pointing at the same remote first), mirroring linkListToCalendar. */
 export function linkAddressBook(bookId: string, accountId: string, url: string) {
+  // Refuse a dead account id. The renderer can hand us one from a stale
+  // accounts array; persisting it detaches the book from sync silently (the
+  // hasBooks gate just skips it), which hid a broken contact sync for days.
+  if (!accountExists(accountId)) {
+    throw new Error(`Cannot link address book: account ${accountId} no longer exists. Reopen Settings and try again.`);
+  }
   // Normalized-key match (see davUrlKey) so an http<->https change on the same
   // address book is recognized instead of orphaning the old book.
   const key = davUrlKey(url);
@@ -299,9 +306,29 @@ async function syncAddressBook(client: Client, book: AddressBook): Promise<Conta
       } else {
         if (!local.dirty) continue;
         const remote = remoteByUid.get(local.carddav_uid);
-        const remoteEtag = remote?.etag ?? null;
-        if (remoteEtag !== local.carddav_etag) {
-          syncLog(`push skipped for dirty contact "${local.fn}": etag moved this round (${local.carddav_etag} vs ${remoteEtag})`);
+        if (!remote) {
+          // Gone from the server. Comparing a null remote etag skipped this on
+          // every future sync, and contactsPruneMissing skips dirty rows, so a
+          // local edit could never escape. Re-create under the same UID.
+          const { vcf } = contactToVCard(contactToParsed(local), local.raw_vcard);
+          const filename = `${local.carddav_uid}.vcf`;
+          const href = `${url}${filename}`;
+          try {
+            const resp = await client.createVCard({ addressBook: { url } as any, vCardString: vcf, filename });
+            const etag = resp.headers?.get?.("etag") || null;
+            contactUpdate(local.id, { carddav_href: href, carddav_etag: etag, raw_vcard: vcf } as Partial<Contact>);
+            if (!etag) needEtagRefresh.push({ id: local.id, href, name: local.fn });
+            remoteUids.add(local.carddav_uid);
+            syncLog(`re-created missing contact "${local.fn}" (${local.carddav_uid}) to unwedge a dirty edit`);
+            result.pushed++;
+          } catch (err: any) {
+            syncLog(`re-create FAILED for missing contact "${local.fn}": ${err?.message || err}`);
+            result.errors.push(`Re-create failed for "${local.fn}": ${err?.message || err}`);
+          }
+          continue;
+        }
+        if (remote.etag !== local.carddav_etag) {
+          syncLog(`push skipped for dirty contact "${local.fn}": etag moved this round (${local.carddav_etag} vs ${remote.etag})`);
           continue;
         }
         const { vcf } = contactToVCard(contactToParsed(local), local.raw_vcard);

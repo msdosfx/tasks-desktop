@@ -119,7 +119,9 @@ export default function App() {
   const [hideCompleted, setHideCompleted] = useState(() => localStorage.getItem("hideCompleted") === "1");
   const [dueFilter, setDueFilter] = useState<"all" | "today" | "week" | "month">("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const [showScheduled, setShowScheduled] = useState(false);
+  // Persisted like hideCompleted/sortMode beside it -- without this the toggle
+  // silently reset to "hidden" on every relaunch.
+  const [showScheduled, setShowScheduled] = useState(() => localStorage.getItem("showScheduled") === "1");
   const [sortMode, setSortMode] = useState<SortMode>(() => (localStorage.getItem("sortMode") as SortMode) || "priority");
   // These three toolbar selects show a short label when closed and expand to
   // the full description while focused/open (same effect as the calendar's
@@ -140,6 +142,9 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("sortMode", sortMode);
   }, [sortMode]);
+  useEffect(() => {
+    localStorage.setItem("showScheduled", showScheduled ? "1" : "0");
+  }, [showScheduled]);
   useEffect(() => {
     localStorage.setItem("smartFilters", JSON.stringify(smartFilters));
   }, [smartFilters]);
@@ -326,7 +331,13 @@ export default function App() {
       const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
       base = base.filter((t) => {
         if (!t.start_date || t.completed) return true;
-        return t.start_date.length <= 10 ? t.start_date <= today : new Date(t.start_date) <= now;
+        const started = t.start_date.length <= 10 ? t.start_date <= today : new Date(t.start_date) <= now;
+        if (started) return true;
+        // Not started yet -- but due wins over hide-until. A task that is due
+        // today or overdue must never be invisible just because someone set a
+        // later start date; that silently buries work that is already late.
+        if (!t.due_date) return false;
+        return t.due_date.length <= 10 ? t.due_date <= today : new Date(t.due_date) <= now;
       });
     }
     if (categoryFilter !== "all" && scope !== "today") {
@@ -446,7 +457,15 @@ export default function App() {
   }
 
   async function createContact() {
-    const book = contactFilter.kind === "book" ? contactFilter.value : addressBooks[0]?.id;
+    // Fallback chain: never silently pick a local book when a synced one exists.
+    // addressBooks[0] alone resolved to the unsynced "Contacts" book and stranded
+    // contacts where nothing could ever push them. Matches the import modal's logic.
+    // (An explicit book filter still wins — creating into a local book you picked
+    // yourself is intent, not an accident.)
+    const book =
+      contactFilter.kind === "book"
+        ? contactFilter.value
+        : (addressBooks.find((b) => b.carddav_addressbook_url)?.id ?? addressBooks[0]?.id);
     if (!book) return;
     const c = await window.api.contacts?.create({ address_book_id: book, fn: "New contact", first_name: "New", last_name: "contact" });
     if (!c) return;

@@ -21,6 +21,7 @@ import {
   accountsAll,
   accountCreate,
   accountUpdate,
+  davRepairOrphanedLinks,
   accountDelete,
   settingsAll,
   settingSet,
@@ -46,7 +47,7 @@ import {
   contactsMerge,
   dedupeDatabase
 } from "./db.js";
-import { testConnection, discoverCalendars, linkListToCalendar, unlinkList, syncAccount, createServerCalendar, encryptPassword, connectCalendar } from "./caldav.js";
+import { testConnection, discoverCalendars, linkListToCalendar, unlinkList, syncAccount, createServerCalendar, encryptPassword, connectCalendar, syncLog } from "./caldav.js";
 import { discoverAddressBooks, linkAddressBook, unlinkAddressBook, syncAccountContacts, connectAddressBook, importVCards } from "./carddav.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -490,8 +491,21 @@ function registerIpc() {
         const contactResults = await syncAccountContacts(account);
         for (const r of contactResults) results.push({ listId: r.bookId, pulled: r.pulled, pushed: r.pushed, errors: r.errors });
       } catch (err: any) {
-        console.error("carddav sync failed:", err?.message || err);
+        // Must reach sync.log AND the UI. Swallowing this into console.error
+        // hid a completely dead contact sync for eight days -- the packaged
+        // build has no console anyone reads.
+        const msg = err?.message || String(err);
+        syncLog(`carddav sync FAILED for account "${account.label}": ${msg}`);
+        results.push({ listId: "", pulled: 0, pushed: 0, errors: [`Contact sync failed: ${msg}`] });
       }
+    } else {
+      // A silent skip here is indistinguishable from "nothing to do", which is
+      // exactly how the orphaned-book bug stayed invisible. Say why.
+      const books = addressBooksAll().filter((b) => b.carddav_addressbook_url);
+      syncLog(
+        `carddav: skipped account "${account.label}" — no linked address book ` +
+          `(${books.length} book(s) have a URL but none point at this account id ${accountId})`
+      );
     }
     accountUpdate(accountId, {
       last_sync_at: new Date().toISOString(),
@@ -506,6 +520,12 @@ app.whenReady().then(() => {
   // shortcut under the packaged app's identity — that collision is what made
   // Windows show the Electron icon on the installed app's taskbar button.
   if (process.platform === "win32") app.setAppUserModelId(isDev ? "com.arlis.tasksdesktop.dev" : isExperimental ? "com.arlis.tasksdesktop.experimental" : "com.arlis.tasksdesktop"); // required for toasts; matches the experimental build's appId so its taskbar button/toasts stay separate from stable
+  // Heal links left pointing at a deleted account before any sync runs. This
+  // state is invisible in the UI -- the list/book still looks connected -- but
+  // every sync gate skips it, so it fails 100% silently until someone reads
+  // the database. Cheap to check, so check every launch.
+  for (const l of davRepairOrphanedLinks()) syncLog(`startup: ${l}`);
+
   registerIpc();
   buildMenu();
   createWindow();
