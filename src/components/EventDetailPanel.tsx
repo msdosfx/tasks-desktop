@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CalendarEvent, TaskList } from "../types";
 import RemindersEditor, { PendingReminder } from "./RemindersEditor";
+import { RECURRING_PER_OCCURRENCE } from "../featureFlags";
 
 type Scope = "all" | "this" | "following";
 
@@ -165,7 +166,9 @@ export default function EventDetailPanel({ event, lists, allCategories = [], occ
     const patch = buildPatch();
     if (!patch) return;
     // A specific occurrence of a recurring event was opened -> ask scope first.
-    if (event!.recurrence && occurrenceStart) {
+    // Gated: with per-occurrence editing off, a recurring-event save applies to
+    // the whole series (no prompt) — see featureFlags.RECURRING_PER_OCCURRENCE.
+    if (RECURRING_PER_OCCURRENCE && event!.recurrence && occurrenceStart) {
       setScopePrompt({ mode: "save", patch });
       return;
     }
@@ -173,7 +176,9 @@ export default function EventDetailPanel({ event, lists, allCategories = [], occ
   }
 
   function handleDelete() {
-    if (event!.recurrence && occurrenceStart) {
+    // Gated: with per-occurrence editing off, deleting a recurring event removes
+    // the whole series (no prompt) — see featureFlags.RECURRING_PER_OCCURRENCE.
+    if (RECURRING_PER_OCCURRENCE && event!.recurrence && occurrenceStart) {
       setScopePrompt({ mode: "delete" });
       return;
     }
@@ -269,9 +274,9 @@ export default function EventDetailPanel({ event, lists, allCategories = [], occ
       )}
       {event.recurrence && (
         <p className="event-readonly-note">
-          {occurrenceStart
+          {RECURRING_PER_OCCURRENCE && occurrenceStart
             ? "This is a repeating event — saving or deleting will ask whether to apply to this occurrence, this and following, or the whole series."
-            : "This is a repeating event. Open a specific occurrence from the calendar to edit or delete just that one."}
+            : "This is a repeating event. Saving or deleting applies to the whole series."}
         </p>
       )}
 
