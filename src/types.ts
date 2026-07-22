@@ -43,6 +43,10 @@ export interface CalendarEvent {
   end_date: string | null;
   all_day: 0 | 1;
   recurrence: string | null;
+  /** JSON array of removed occurrence-start strings (EXDATE). */
+  exdates?: string;
+  /** JSON array of EventOverride objects (per-occurrence edits). */
+  overrides?: string;
   tags: string;
   caldav_uid: string | null;
   caldav_href: string | null;
@@ -51,6 +55,18 @@ export interface CalendarEvent {
   dirty?: 0 | 1;
   created_at: string;
   updated_at: string;
+}
+
+/** A single-occurrence override of a recurring event, keyed by the original
+ *  occurrence start it replaces (its RECURRENCE-ID). Mirrors electron/ical.ts. */
+export interface EventOverride {
+  recurrence_id: string;
+  title?: string;
+  notes?: string;
+  location?: string;
+  start_date: string;
+  end_date: string | null;
+  all_day: 0 | 1;
 }
 
 export interface Reminder {

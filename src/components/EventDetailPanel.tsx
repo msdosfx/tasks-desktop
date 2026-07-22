@@ -2,12 +2,24 @@ import { useEffect, useState } from "react";
 import { CalendarEvent, TaskList } from "../types";
 import RemindersEditor, { PendingReminder } from "./RemindersEditor";
 
+type Scope = "all" | "this" | "following";
+
 interface Props {
   event: CalendarEvent | null;
   lists: TaskList[];
   allCategories?: string[];
+  /** The occurrence the user opened (its RECURRENCE-ID), when a specific
+   *  occurrence of a recurring event was clicked on the calendar; null
+   *  otherwise. Its presence enables the This / This-and-following / All prompt. */
+  occurrenceStart?: string | null;
   onUpdate: (id: string, patch: Partial<CalendarEvent>) => void;
   onDelete: (id: string) => void;
+  /** Apply an edit to just one occurrence ("this") or the occurrence onward
+   *  ("following"). Whole-series ("all") edits go through onUpdate. */
+  onUpdateScoped: (scope: "this" | "following", masterId: string, occurrenceStart: string, patch: Partial<CalendarEvent>) => void;
+  /** Delete one occurrence ("this") or the occurrence onward ("following").
+   *  Whole-series ("all") deletes go through onDelete. */
+  onDeleteScoped: (scope: "this" | "following", masterId: string, occurrenceStart: string) => void;
 }
 
 /** Splits a stored value ("YYYY-MM-DD" or full ISO datetime) into local-time
@@ -54,7 +66,7 @@ const RECUR_PRESETS: { label: string; value: string | null }[] = [
   { label: "Yearly", value: "FREQ=YEARLY" }
 ];
 
-export default function EventDetailPanel({ event, lists, allCategories = [], onUpdate, onDelete }: Props) {
+export default function EventDetailPanel({ event, lists, allCategories = [], occurrenceStart = null, onUpdate, onDelete, onUpdateScoped, onDeleteScoped }: Props) {
   const [title, setTitle] = useState("");
   const [listId, setListId] = useState("");
   const [location, setLocation] = useState("");
@@ -68,6 +80,9 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
   const [customRecur, setCustomRecur] = useState("");
   const [reminders, setReminders] = useState<PendingReminder[]>([]);
   const [dirty, setDirty] = useState(false);
+  // When a recurring occurrence is saved/deleted, we ask This / Following / All
+  // first; the pending action (and, for saves, the built patch) lives here.
+  const [scopePrompt, setScopePrompt] = useState<{ mode: "save"; patch: Partial<CalendarEvent> } | { mode: "delete" } | null>(null);
 
   useEffect(() => {
     setTitle(event?.title ?? "");
@@ -108,12 +123,12 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
     markDirty();
   }
 
-  async function handleSave() {
-    const id = event!.id;
+  /** The edited fields, or null if the required start date is missing. */
+  function buildPatch(): Partial<CalendarEvent> | null {
     const start = joinDateTime(startDate, startTime);
-    if (!start) return; // start date is required
+    if (!start) return null; // start date is required
     const recurrence = recurMode === "custom" ? (customRecur || null) : RECUR_PRESETS.find((p) => p.label === recurMode)?.value ?? null;
-    onUpdate(id, {
+    return {
       title: title.trim() || event!.title,
       list_id: listId,
       location,
@@ -123,7 +138,13 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
       recurrence,
       notes,
       tags
-    });
+    };
+  }
+
+  /** Whole-event (or whole-series) save: writes the row and reconciles reminders. */
+  async function doAllSave(patch: Partial<CalendarEvent>) {
+    const id = event!.id;
+    onUpdate(id, patch);
     // Same batch-save diff as DetailPanel: only touch reminders that were
     // actually added or removed this session.
     const existing = await window.api.reminders?.for("event", id);
@@ -138,6 +159,38 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
     const refreshed = await window.api.reminders?.for("event", id);
     setReminders((refreshed ?? []).map((r) => ({ id: r.id, offset_minutes: r.offset_minutes })));
     setDirty(false);
+  }
+
+  async function handleSave() {
+    const patch = buildPatch();
+    if (!patch) return;
+    // A specific occurrence of a recurring event was opened -> ask scope first.
+    if (event!.recurrence && occurrenceStart) {
+      setScopePrompt({ mode: "save", patch });
+      return;
+    }
+    await doAllSave(patch);
+  }
+
+  function handleDelete() {
+    if (event!.recurrence && occurrenceStart) {
+      setScopePrompt({ mode: "delete" });
+      return;
+    }
+    onDelete(event!.id);
+  }
+
+  function applyScope(scope: Scope) {
+    const prompt = scopePrompt;
+    setScopePrompt(null);
+    if (!prompt) return;
+    if (prompt.mode === "save") {
+      if (scope === "all") void doAllSave(prompt.patch);
+      else { onUpdateScoped(scope, event!.id, occurrenceStart!, prompt.patch); setDirty(false); }
+    } else {
+      if (scope === "all") onDelete(event!.id);
+      else onDeleteScoped(scope, event!.id, occurrenceStart!);
+    }
   }
 
   return (
@@ -216,8 +269,9 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
       )}
       {event.recurrence && (
         <p className="event-readonly-note">
-          Editing a recurring event rewrites the whole series — there's no way yet to change
-          just one occurrence.
+          {occurrenceStart
+            ? "This is a repeating event — saving or deleting will ask whether to apply to this occurrence, this and following, or the whole series."
+            : "This is a repeating event. Open a specific occurrence from the calendar to edit or delete just that one."}
         </p>
       )}
 
@@ -275,9 +329,26 @@ export default function EventDetailPanel({ event, lists, allCategories = [], onU
 
       <div className="detail-actions">
         <button className="primary" onClick={handleSave} disabled={!dirty || !startDate}>{dirty ? "Save" : "Saved"}</button>
-        <button className="danger" onClick={() => onDelete(event.id)}>Delete</button>
+        <button className="danger" onClick={handleDelete}>Delete</button>
       </div>
       {event.caldav_uid && <div style={{ marginTop: 10, fontSize: 11, color: "#777" }}>Synced via CalDAV</div>}
+
+      {scopePrompt && (
+        <div className="overlay" onClick={() => setScopePrompt(null)}>
+          <div className="settings-modal" style={{ width: 380, maxHeight: "none" }} onClick={(e) => e.stopPropagation()}>
+            <h2>{scopePrompt.mode === "delete" ? "Delete repeating event" : "Save repeating event"}</h2>
+            <p style={{ color: "#9aa0a6", fontSize: 13, marginTop: 0 }}>
+              {scopePrompt.mode === "delete" ? "Delete which events?" : "Apply your changes to which events?"}
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+              <button className="primary" onClick={() => applyScope("this")}>This event only</button>
+              <button onClick={() => applyScope("following")}>This and following events</button>
+              <button onClick={() => applyScope("all")}>All events in the series</button>
+              <button style={{ marginTop: 4 }} onClick={() => setScopePrompt(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

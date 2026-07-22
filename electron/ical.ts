@@ -192,6 +192,18 @@ export function newUid(): string {
   return `${nanoid()}@tasks-desktop`;
 }
 
+export interface EventOverride {
+  /** The ORIGINAL occurrence start this override replaces (its RECURRENCE-ID),
+   *  in the same string format as start_date (date-only or ISO datetime). */
+  recurrence_id: string;
+  title?: string;
+  notes?: string;
+  location?: string;
+  start_date: string;
+  end_date: string | null;
+  all_day: 0 | 1;
+}
+
 export interface ParsedVEvent {
   uid: string;
   title: string;
@@ -203,17 +215,22 @@ export interface ParsedVEvent {
   recurrence: string | null;
   tags: string;
   reminderOffsets: number[];
+  /** Occurrence dates removed from the series (EXDATE), same format as start_date. */
+  exdates: string[];
+  /** Per-occurrence overrides (VEVENTs carrying a RECURRENCE-ID). */
+  overrides: EventOverride[];
 }
 
 /** Builds an iCalendar VEVENT string from a local event, for pushing to
- *  CalDAV. Mirrors `taskToVTodo`. The push phase in caldav.ts only calls this
- *  for non-recurring events -- events with an RRULE stay read-only for now
- *  (see docs/roadmap.md "Recurring event editing"), but RRULE is still
- *  round-tripped here in case that changes. */
+ *  CalDAV. Mirrors `taskToVTodo`. For a recurring master, `exdates` (removed
+ *  occurrences) are emitted as EXDATE lines and `overrides` (per-occurrence
+ *  edits) as extra VEVENTs sharing the UID with a RECURRENCE-ID. */
 export function eventToVEvent(
   event: CalendarEvent,
   existingUid?: string,
-  reminderOffsets: number[] = []
+  reminderOffsets: number[] = [],
+  exdates: string[] = [],
+  overrides: EventOverride[] = []
 ): { uid: string; ics: string } {
   const uid = existingUid || event.caldav_uid || `${event.id}@tasks-desktop`;
   const comp = new ICAL.Component(["vcalendar", [], []]);
@@ -238,6 +255,11 @@ export function eventToVEvent(
     } catch {
       // ignore malformed rrule
     }
+    // Occurrences the user removed from the series ("skip this day"). One
+    // EXDATE per value keeps date-only vs date-time typing unambiguous.
+    for (const ex of exdates) {
+      vevent.addPropertyWithValue("exdate", dateStringToIcalTime(ex));
+    }
   }
   const tags = (event.tags || "")
     .split(",")
@@ -251,32 +273,90 @@ export function eventToVEvent(
   addAlarms(vevent, reminderOffsets);
 
   comp.addSubcomponent(vevent);
+
+  // Per-occurrence overrides: one extra VEVENT per modified occurrence, sharing
+  // the master UID and carrying a RECURRENCE-ID identifying which occurrence it
+  // replaces. Only meaningful for a recurring master.
+  if (event.recurrence) {
+    for (const ov of overrides) {
+      const ex = new ICAL.Component("vevent");
+      ex.updatePropertyWithValue("uid", uid);
+      ex.updatePropertyWithValue("recurrence-id", dateStringToIcalTime(ov.recurrence_id));
+      ex.updatePropertyWithValue("summary", ov.title ?? event.title);
+      const notes = ov.notes ?? event.notes;
+      if (notes) ex.updatePropertyWithValue("description", notes);
+      const location = ov.location ?? event.location;
+      if (location) ex.updatePropertyWithValue("location", location);
+      ex.updatePropertyWithValue("dtstamp", ICAL.Time.fromJSDate(new Date(event.updated_at), true));
+      ex.updatePropertyWithValue("sequence", event.sequence ?? 0);
+      ex.updatePropertyWithValue("dtstart", dateStringToIcalTime(ov.start_date));
+      if (ov.end_date) {
+        ex.updatePropertyWithValue("dtend", dateStringToIcalTime(ov.end_date));
+      }
+      comp.addSubcomponent(ex);
+    }
+  }
+
   return { uid, ics: comp.toString() };
 }
 
-/** Parses a VEVENT. Ignores VEVENTs with no DTSTART, which aren't
- *  meaningfully placeable on a calendar grid. */
+/** Parses a VEVENT resource. A resource may hold a master VEVENT plus one
+ *  VEVENT per overridden occurrence (same UID, distinct RECURRENCE-ID); the
+ *  master is the one without a RECURRENCE-ID. Returns null if there's no
+ *  placeable master (no DTSTART). */
 export function parseVEvent(ics: string): ParsedVEvent | null {
   try {
     const jcal = ICAL.parse(ics);
     const comp = new ICAL.Component(jcal);
-    const vevent = comp.getFirstSubcomponent("vevent");
-    if (!vevent) return null;
+    const vevents = comp.getAllSubcomponents("vevent");
+    if (!vevents.length) return null;
 
-    const uid = vevent.getFirstPropertyValue("uid") as string;
-    const title = (vevent.getFirstPropertyValue("summary") as string) || "Untitled";
-    const notes = (vevent.getFirstPropertyValue("description") as string) || "";
-    const location = (vevent.getFirstPropertyValue("location") as string) || "";
+    // The master is the VEVENT with no RECURRENCE-ID; the rest are
+    // per-occurrence exception overrides sharing its UID.
+    const master = vevents.find((v) => !v.getFirstProperty("recurrence-id")) || null;
+    if (!master) return null;
 
-    const dtstart = vevent.getFirstPropertyValue("dtstart") as ICAL.Time | null;
+    const dtstart = master.getFirstPropertyValue("dtstart") as ICAL.Time | null;
     if (!dtstart) return null;
-    const dtend = vevent.getFirstPropertyValue("dtend") as ICAL.Time | null;
+    const dtend = master.getFirstPropertyValue("dtend") as ICAL.Time | null;
 
-    const rruleProp = vevent.getFirstProperty("rrule");
+    const uid = master.getFirstPropertyValue("uid") as string;
+    const title = (master.getFirstPropertyValue("summary") as string) || "Untitled";
+    const notes = (master.getFirstPropertyValue("description") as string) || "";
+    const location = (master.getFirstPropertyValue("location") as string) || "";
+
+    const rruleProp = master.getFirstProperty("rrule");
     const recurrence = rruleProp ? (rruleProp.getFirstValue() as ICAL.Recur).toString() : null;
 
-    const categories = vevent.getFirstProperty("categories");
+    const categories = master.getFirstProperty("categories");
     const tags = categories ? (categories.getValues() as string[]).join(", ") : "";
+
+    // EXDATE(s): each property may carry one or more values.
+    const exdates: string[] = [];
+    for (const p of master.getAllProperties("exdate")) {
+      for (const v of p.getValues()) {
+        if (v instanceof ICAL.Time) exdates.push(icalTimeToString(v));
+      }
+    }
+
+    // Exception overrides (VEVENTs with a RECURRENCE-ID).
+    const overrides: EventOverride[] = [];
+    for (const v of vevents) {
+      const rid = v.getFirstPropertyValue("recurrence-id") as ICAL.Time | null;
+      if (!rid) continue;
+      const ovStart = v.getFirstPropertyValue("dtstart") as ICAL.Time | null;
+      if (!ovStart) continue;
+      const ovEnd = v.getFirstPropertyValue("dtend") as ICAL.Time | null;
+      overrides.push({
+        recurrence_id: icalTimeToString(rid),
+        title: (v.getFirstPropertyValue("summary") as string) || title,
+        notes: (v.getFirstPropertyValue("description") as string) || "",
+        location: (v.getFirstPropertyValue("location") as string) || "",
+        start_date: icalTimeToString(ovStart),
+        end_date: ovEnd ? icalTimeToString(ovEnd) : null,
+        all_day: ovStart.isDate ? 1 : 0
+      });
+    }
 
     return {
       uid,
@@ -288,7 +368,9 @@ export function parseVEvent(ics: string): ParsedVEvent | null {
       all_day: dtstart.isDate ? 1 : 0,
       recurrence,
       tags,
-      reminderOffsets: extractReminderOffsets(vevent)
+      reminderOffsets: extractReminderOffsets(master),
+      exdates,
+      overrides
     };
   } catch (err) {
     console.error("Failed to parse VEVENT", err);

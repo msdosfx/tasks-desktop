@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createCalendar, destroyCalendar, DayGrid, TimeGrid, Interaction } from "@event-calendar/core";
 import "@event-calendar/core/index.css";
 import { RRule } from "rrule";
-import { CalendarEvent, Task, TaskList } from "../types";
+import { CalendarEvent, EventOverride, Task, TaskList } from "../types";
 import { selectWidth } from "../selectWidth";
 import ContextMenu from "./ContextMenu";
 
@@ -17,7 +17,7 @@ interface Props {
   selectedTaskId: string | null;
   selectedEventId: string | null;
   onSelectTask: (id: string) => void;
-  onSelectEvent: (id: string) => void;
+  onSelectEvent: (id: string, occurrenceStart?: string | null) => void;
   /** Fires with a "YYYY-MM-DD" date, to create a new (non-recurring) event
    *  there -- double-click a blank day, or "New Event" on its context menu. */
   onCreateEvent: (dateStr: string) => void;
@@ -109,6 +109,18 @@ function occurrenceDeltas(rruleStr: string, anchor: string, windowStart: Date, w
   } catch {
     return [];
   }
+}
+
+/** Epoch ms for an occurrence key, tolerant of date-only vs datetime, so a
+ *  RECURRENCE-ID / EXDATE matches the occurrence regardless of string format. */
+function occEpoch(v: string): number {
+  return new Date(v.length <= 10 ? `${v}T00:00:00Z` : v).getTime();
+}
+function parseExdates(json: string | undefined): string[] {
+  try { return JSON.parse(json || "[]"); } catch { return []; }
+}
+function parseOverrides(json: string | undefined): EventOverride[] {
+  try { return JSON.parse(json || "[]"); } catch { return []; }
 }
 
 export default function CalendarView({
@@ -209,8 +221,20 @@ export default function CalendarView({
         if (listFilter !== "all" && e.list_id !== listFilter) continue;
         if (!matchesCategory(e.tags)) continue;
         const recurring = !!e.recurrence;
+        // Per-occurrence exceptions: dates the user removed (exdates) are
+        // skipped entirely, and edited occurrences (overrides, keyed by their
+        // original start = RECURRENCE-ID) are drawn with the override's values.
+        const exSet = recurring ? new Set(parseExdates(e.exdates).map(occEpoch)) : null;
+        const ovMap = recurring
+          ? new Map(parseOverrides(e.overrides).map((o): [number, EventOverride] => [occEpoch(o.recurrence_id), o]))
+          : null;
         const deltas = deltasFor(e.recurrence, e.start_date);
         deltas.forEach((d, i) => {
+          // This occurrence's ORIGINAL start (its RECURRENCE-ID), used to match
+          // exdates/overrides and, on click, to tell step 5 which one was hit.
+          const occStart = shiftStored(e.start_date, d);
+          if (exSet && exSet.has(occEpoch(occStart))) return; // removed occurrence
+          const ov = ovMap ? ovMap.get(occEpoch(occStart)) : undefined;
           out.push({
             // Occurrences beyond the first need distinct ids (the library
             // rejects duplicates); the master id is carried in extendedProps so
@@ -218,10 +242,10 @@ export default function CalendarView({
             // the plain `event-<id>` so the (editable, non-recurring) drag path
             // that slices the id off is unaffected.
             id: recurring ? `event-${e.id}::${i}` : `event-${e.id}`,
-            title: e.title,
-            start: toLocalFloating(shiftStored(e.start_date, d)),
-            end: toLocalFloating(shiftStored(e.end_date || e.start_date, d)),
-            allDay: !!e.all_day,
+            title: ov ? (ov.title || e.title) : e.title,
+            start: toLocalFloating(ov ? ov.start_date : occStart),
+            end: toLocalFloating(ov ? (ov.end_date || ov.start_date) : shiftStored(e.end_date || e.start_date, d)),
+            allDay: ov ? !!ov.all_day : !!e.all_day,
             backgroundColor: colorFor(e.list_id),
             classNames: [
               ...(e.id === selectedEventId ? ["ec-selected"] : []),
@@ -231,7 +255,7 @@ export default function CalendarView({
             // only, so a drag would silently shift the entire series. Locking
             // them (and reverting in the drag guards) keeps that safe.
             editable: !recurring,
-            extendedProps: { kind: "event", location: e.location, masterId: e.id, recurring }
+            extendedProps: { kind: "event", location: e.location, masterId: e.id, recurring, occurrenceStart: recurring ? occStart : null }
           });
         });
       }
@@ -377,7 +401,7 @@ export default function CalendarView({
         const props = info?.event?.extendedProps ?? {};
         const id = String(info?.event?.id ?? "");
         if (props.kind === "task") onSelectTaskRef.current(props.masterId ?? id.slice(5));
-        else if (props.kind === "event") onSelectEventRef.current(props.masterId ?? id.slice(6));
+        else if (props.kind === "event") onSelectEventRef.current(props.masterId ?? id.slice(6), props.occurrenceStart ?? null);
       },
       // Drag a bar to a new day/time. `info.event`/`info.oldEvent` carry the
       // library's already-local Date start/end; the millisecond diff between
