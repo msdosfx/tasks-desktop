@@ -75,6 +75,9 @@ export default function App() {
   const [scope, setScope] = useState<Scope>("all");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  // One-shot signal: the id of a task/event just created, so its detail panel
+  // focuses+selects the title field. Cleared once the panel consumes it.
+  const [focusTitleId, setFocusTitleId] = useState<string | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [addressBooks, setAddressBooks] = useState<AddressBook[]>([]);
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
@@ -466,6 +469,7 @@ export default function App() {
     if (!e) return;
     await loadEvents();
     selectEvent(e.id);
+    setFocusTitleId(e.id);
     scheduleDirtySync();
   }
 
@@ -621,6 +625,7 @@ export default function App() {
     });
     await loadTasks();
     selectTask(t.id);
+    setFocusTitleId(t.id);
     scheduleDirtySync();
     lastActionRef.current = async () => { await window.api.tasks.delete(t.id, true); };
   }
@@ -680,6 +685,7 @@ export default function App() {
     const t = await window.api.tasks.create({ list_id, title: "New task" });
     await loadTasks();
     selectTask(t.id);
+    setFocusTitleId(t.id);
     scheduleDirtySync();
     lastActionRef.current = async () => { await window.api.tasks.delete(t.id, true); };
   }
@@ -755,6 +761,11 @@ export default function App() {
     if (scope === id) setScope("all");
     await loadLists();
     await loadTasks();
+  }
+
+  async function renameList(id: string, name: string) {
+    await window.api.lists.update(id, { name } as Partial<TaskList>);
+    await loadLists();
   }
 
   async function removeList(id: string) {
@@ -879,6 +890,7 @@ export default function App() {
         onCreateServerList={createServerList}
         onDeleteList={deleteList}
         onRemoveList={removeList}
+        onRenameList={renameList}
         onSyncList={syncListAccount}
         onOpenSettings={() => setShowSettings(true)}
         onSync={() => runSync()}
@@ -1082,6 +1094,8 @@ export default function App() {
             onDelete={deleteEvent}
             onUpdateScoped={updateEventScoped}
             onDeleteScoped={deleteEventScoped}
+            autoFocusTitle={focusTitleId === selectedEventId}
+            onTitleFocused={() => setFocusTitleId(null)}
           />
         ) : (
           <DetailPanel
@@ -1094,6 +1108,8 @@ export default function App() {
             onAddSubtask={addSubtask}
             onToggleComplete={toggleComplete}
             onSelectTask={selectTask}
+            autoFocusTitle={!!selectedTask && focusTitleId === selectedTask.id}
+            onTitleFocused={() => setFocusTitleId(null)}
           />
         ))}
       </div>

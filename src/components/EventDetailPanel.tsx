@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CalendarEvent, TaskList } from "../types";
 import RemindersEditor, { PendingReminder } from "./RemindersEditor";
 import { RECURRING_PER_OCCURRENCE } from "../featureFlags";
@@ -21,6 +21,11 @@ interface Props {
   /** Delete one occurrence ("this") or the occurrence onward ("following").
    *  Whole-series ("all") deletes go through onDelete. */
   onDeleteScoped: (scope: "this" | "following", masterId: string, occurrenceStart: string) => void;
+  /** When true (set right after this event was just created), focus and select
+   *  the title field so the user can type over the placeholder immediately.
+   *  onTitleFocused clears the one-shot signal so it doesn't re-fire. */
+  autoFocusTitle?: boolean;
+  onTitleFocused?: () => void;
 }
 
 /** Splits a stored value ("YYYY-MM-DD" or full ISO datetime) into local-time
@@ -67,7 +72,8 @@ const RECUR_PRESETS: { label: string; value: string | null }[] = [
   { label: "Yearly", value: "FREQ=YEARLY" }
 ];
 
-export default function EventDetailPanel({ event, lists, allCategories = [], occurrenceStart = null, onUpdate, onDelete, onUpdateScoped, onDeleteScoped }: Props) {
+export default function EventDetailPanel({ event, lists, allCategories = [], occurrenceStart = null, onUpdate, onDelete, onUpdateScoped, onDeleteScoped, autoFocusTitle, onTitleFocused }: Props) {
+  const titleRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("");
   const [listId, setListId] = useState("");
   const [location, setLocation] = useState("");
@@ -107,6 +113,20 @@ export default function EventDetailPanel({ event, lists, allCategories = [], occ
       setReminders([]);
     }
   }, [event?.id]);
+
+  // Just-created events: clear the "New event" placeholder title so the field is
+  // empty and ready to type into, then focus it. The stored title stays as a
+  // fallback if the user saves without typing (see buildPatch), so nothing is
+  // ever persisted blank.
+  useEffect(() => {
+    if (!autoFocusTitle || !event) return;
+    setTitle("");
+    const id = setTimeout(() => {
+      titleRef.current?.focus();
+      onTitleFocused?.();
+    }, 0);
+    return () => clearTimeout(id);
+  }, [autoFocusTitle, event?.id]);
 
   if (!event) {
     return <div className="detail-panel"><div className="no-selection">Select a task or event to see details.</div></div>;
@@ -204,6 +224,7 @@ export default function EventDetailPanel({ event, lists, allCategories = [], occ
 
       <label>Title</label>
       <input
+        ref={titleRef}
         type="text"
         value={title}
         onChange={(e) => { setTitle(e.target.value); markDirty(); }}

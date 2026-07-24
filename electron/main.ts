@@ -242,6 +242,50 @@ function checkReminders() {
   }
 }
 
+/** Combine the sync logs (current + rotated) with a short diagnostics header
+ *  into one text file the user can save and share. No credentials are included
+ *  -- just app/version/platform, the data-folder path, and list/account counts.
+ *  Reveals the saved file in the OS file manager. */
+async function exportLogs() {
+  try {
+    const dir = app.getPath("userData");
+    const parts: string[] = [
+      "Tasks Desktop diagnostics",
+      `Generated:   ${new Date().toISOString()}`,
+      `App version: ${app.getVersion()}`,
+      `Platform:    ${process.platform} ${process.arch}`,
+      `User data:   ${dir}`
+    ];
+    try {
+      const lists = listsAll();
+      parts.push(`Lists:       ${lists.length} (linked to a server: ${lists.filter((l) => l.caldav_calendar_url).length})`);
+      parts.push(`Accounts:    ${accountsAll().length}`);
+    } catch { /* non-fatal */ }
+    parts.push("");
+    let anyLog = false;
+    for (const name of ["sync.log.1", "sync.log"]) {
+      try {
+        const content = fs.readFileSync(path.join(dir, name), "utf8");
+        parts.push(`===== ${name} =====`, content, "");
+        anyLog = true;
+      } catch { /* file may not exist */ }
+    }
+    if (!anyLog) parts.push("(no sync log has been written yet)");
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const res = await dialog.showSaveDialog(mainWindow!, {
+      title: "Export Logs",
+      defaultPath: path.join(app.getPath("desktop"), `tasks-desktop-logs-${stamp}.txt`),
+      filters: [{ name: "Text", extensions: ["txt"] }]
+    });
+    if (res.canceled || !res.filePath) return;
+    fs.writeFileSync(res.filePath, parts.join("\n"), "utf8");
+    shell.showItemInFolder(res.filePath);
+  } catch (err: any) {
+    dialog.showErrorBox("Export Logs failed", String(err?.message || err));
+  }
+}
+
 function buildMenu() {
   const isMac = process.platform === "darwin";
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -332,6 +376,15 @@ function buildMenu() {
           // Configurable so it can be changed/disabled on hotkey conflicts.
           ...(getSetting("syncHotkey") ? { accelerator: getSetting("syncHotkey") } : {}),
           click: () => mainWindow?.webContents.send("shortcut:sync-now")
+        },
+        { type: "separator" },
+        {
+          label: "Export Logs…",
+          click: () => { exportLogs(); }
+        },
+        {
+          label: "Open Logs Folder",
+          click: () => { shell.openPath(app.getPath("userData")); }
         }
       ]
     }

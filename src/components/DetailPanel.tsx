@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Task, TaskList, PRIORITY_LABELS } from "../types";
 import RemindersEditor, { PendingReminder } from "./RemindersEditor";
 
@@ -12,6 +12,11 @@ interface Props {
   onAddSubtask: (parentId: string, title: string) => void;
   onToggleComplete: (id: string) => void;
   onSelectTask: (id: string) => void;
+  /** When true (set right after this task was just created), focus and select
+   *  the title field so the user can type over the placeholder immediately.
+   *  onTitleFocused clears the one-shot signal so it doesn't re-fire. */
+  autoFocusTitle?: boolean;
+  onTitleFocused?: () => void;
 }
 
 const RECUR_PRESETS: { label: string; value: string | null }[] = [
@@ -57,7 +62,8 @@ function addOneHour(date: string, time: string): { date: string; time: string } 
   };
 }
 
-export default function DetailPanel({ task, lists, subtasks, allCategories = [], onUpdate, onDelete, onAddSubtask, onToggleComplete, onSelectTask }: Props) {
+export default function DetailPanel({ task, lists, subtasks, allCategories = [], onUpdate, onDelete, onAddSubtask, onToggleComplete, onSelectTask, autoFocusTitle, onTitleFocused }: Props) {
+  const titleRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [listId, setListId] = useState("");
@@ -101,6 +107,20 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
       setReminders([]);
     }
   }, [task?.id]);
+
+  // Just-created tasks: clear the "New task" placeholder title so the field is
+  // empty and ready to type into, then focus it. The stored title stays as a
+  // fallback if the user saves without typing (see buildPatch), so nothing is
+  // ever persisted blank.
+  useEffect(() => {
+    if (!autoFocusTitle || !task) return;
+    setTitle("");
+    const id = setTimeout(() => {
+      titleRef.current?.focus();
+      onTitleFocused?.();
+    }, 0);
+    return () => clearTimeout(id);
+  }, [autoFocusTitle, task?.id]);
 
   if (!task) {
     return <div className="detail-panel"><div className="no-selection">Select a task or event to see details.</div></div>;
@@ -154,6 +174,7 @@ export default function DetailPanel({ task, lists, subtasks, allCategories = [],
 
       <label>Title</label>
       <input
+        ref={titleRef}
         type="text"
         value={title}
         onChange={(e) => { setTitle(e.target.value); markDirty(); }}

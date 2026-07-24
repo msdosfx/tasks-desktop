@@ -33,6 +33,9 @@ interface Props {
 }
 
 type DisplayMode = "range" | "due" | "start";
+// Event equivalent of DisplayMode. "end" is the event's analogue of a task's
+// "due" (a single-day bar on the last day); "range" spans start..end.
+type EventDisplayMode = "range" | "start" | "end";
 
 /** One day after a date-only string ("YYYY-MM-DD"), for the exclusive `end`
  *  that all-day ranges use (matches iCalendar's own DTEND convention). */
@@ -64,6 +67,14 @@ function toLocalFloating(v: string): string {
   const d = new Date(v);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** The local "YYYY-MM-DD" day a stored value falls on. Date-only values pass
+ *  through unchanged; datetimes are resolved to their local wall-clock day
+ *  (via toLocalFloating) so single-day event modes anchor on the day the user
+ *  sees, not a UTC-shifted one. */
+function localDay(v: string): string {
+  return toLocalFloating(v).slice(0, 10);
 }
 
 /** "YYYY-MM-DD" from a Date's LOCAL wall-clock date -- deliberately not
@@ -164,9 +175,15 @@ export default function CalendarView({
   const [displayMode, setDisplayMode] = useState<DisplayMode>(
     () => (localStorage.getItem("calendarTaskDisplayMode") as DisplayMode) || "due"
   );
+  // Events default to the full start..end range (multi-day events span every
+  // day). Persisted separately from the task mode.
+  const [eventDisplayMode, setEventDisplayMode] = useState<EventDisplayMode>(
+    () => (localStorage.getItem("calendarEventDisplayMode") as EventDisplayMode) || "range"
+  );
   // The display-mode select shows a short label when closed and expands to
   // the full description while focused/open, then shrinks back on blur.
   const [displayModeFocused, setDisplayModeFocused] = useState(false);
+  const [eventDisplayModeFocused, setEventDisplayModeFocused] = useState(false);
   // Month/week/day toggle -- replaces the library's default "today" header
   // button (see headerToolbar in the mount effect below), which sat there
   // not doing anything useful for this app. Week/day use the TimeGrid
@@ -181,6 +198,7 @@ export default function CalendarView({
 
   useEffect(() => { localStorage.setItem("calendarCategoryFilter", categoryFilter); }, [categoryFilter]);
   useEffect(() => { localStorage.setItem("calendarTaskDisplayMode", displayMode); }, [displayMode]);
+  useEffect(() => { localStorage.setItem("calendarEventDisplayMode", eventDisplayMode); }, [eventDisplayMode]);
   const displayModeRef = useRef(displayMode);
   useEffect(() => { displayModeRef.current = displayMode; });
 
@@ -235,6 +253,33 @@ export default function CalendarView({
           const occStart = shiftStored(e.start_date, d);
           if (exSet && exSet.has(occEpoch(occStart))) return; // removed occurrence
           const ov = ovMap ? ovMap.get(occEpoch(occStart)) : undefined;
+          const allDay = ov ? !!ov.all_day : !!e.all_day;
+          // Stored start and INCLUSIVE end for this occurrence (all-day ends are
+          // stored as the last day the event covers -- see ical.ts, which does
+          // the exclusive<->inclusive conversion at the sync boundary).
+          const startStored = ov ? ov.start_date : occStart;
+          const endStored = ov ? (ov.end_date || ov.start_date) : shiftStored(e.end_date || e.start_date, d);
+          // Map to the calendar library. It wants an EXCLUSIVE end for all-day
+          // bars, so an inclusive last day becomes nextDay(lastDay) -- the same
+          // trick the task bars below use. The "start"/"end" modes collapse the
+          // event to a single all-day bar on that one day.
+          let lStart: string, lEnd: string, lAllDay: boolean;
+          if (eventDisplayMode === "start") {
+            const day = localDay(startStored);
+            lStart = day; lEnd = nextDay(day); lAllDay = true;
+          } else if (eventDisplayMode === "end") {
+            const day = localDay(endStored);
+            lStart = day; lEnd = nextDay(day); lAllDay = true;
+          } else if (allDay) {
+            lStart = localDay(startStored); lEnd = nextDay(localDay(endStored)); lAllDay = true;
+          } else {
+            lStart = toLocalFloating(startStored); lEnd = toLocalFloating(endStored); lAllDay = false;
+          }
+          // Only the full "range" view is drag/resize-editable -- there each edge
+          // maps to a real date field. The collapsed single-day modes are a
+          // read-only projection, and recurring occurrences stay locked (a drag
+          // would silently shift the whole series; the drag guards also revert).
+          const editable = !recurring && eventDisplayMode === "range";
           out.push({
             // Occurrences beyond the first need distinct ids (the library
             // rejects duplicates); the master id is carried in extendedProps so
@@ -243,18 +288,15 @@ export default function CalendarView({
             // that slices the id off is unaffected.
             id: recurring ? `event-${e.id}::${i}` : `event-${e.id}`,
             title: ov ? (ov.title || e.title) : e.title,
-            start: toLocalFloating(ov ? ov.start_date : occStart),
-            end: toLocalFloating(ov ? (ov.end_date || ov.start_date) : shiftStored(e.end_date || e.start_date, d)),
-            allDay: ov ? !!ov.all_day : !!e.all_day,
+            start: lStart,
+            end: lEnd,
+            allDay: lAllDay,
             backgroundColor: colorFor(e.list_id),
             classNames: [
               ...(e.id === selectedEventId ? ["ec-selected"] : []),
               ...(recurring ? ["ec-recurring"] : [])
             ],
-            // Recurring occurrences are read-only ghosts: they're whole-series
-            // only, so a drag would silently shift the entire series. Locking
-            // them (and reverting in the drag guards) keeps that safe.
-            editable: !recurring,
+            editable,
             extendedProps: { kind: "event", location: e.location, masterId: e.id, recurring, occurrenceStart: recurring ? occStart : null }
           });
         });
@@ -534,7 +576,7 @@ export default function CalendarView({
     if (!ready || !ecRef.current) return;
     ecRef.current.setOption("events", buildEcEvents());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, events, tasks, calendarShow, lists, categoryFilter, displayMode, listFilter, selectedTaskId, selectedEventId]);
+  }, [ready, events, tasks, calendarShow, lists, categoryFilter, displayMode, eventDisplayMode, listFilter, selectedTaskId, selectedEventId]);
 
   useEffect(() => {
     if (!ready || !ecRef.current) return;
@@ -552,6 +594,17 @@ export default function CalendarView({
     range: "Tasks: Start–due range"
   };
   const displayModeLabel = displayModeFocused ? displayModeFullLabel : displayModeShortLabel;
+  const eventDisplayModeShortLabel: Record<EventDisplayMode, string> = {
+    end: "Events: End",
+    start: "Events: Start",
+    range: "Events: Start–End"
+  };
+  const eventDisplayModeFullLabel: Record<EventDisplayMode, string> = {
+    end: "Events: End date only",
+    start: "Events: Start date only",
+    range: "Events: Start–end range"
+  };
+  const eventDisplayModeLabel = eventDisplayModeFocused ? eventDisplayModeFullLabel : eventDisplayModeShortLabel;
   const listFilterLabel = listFilter === "all" ? "List: All" : `List: ${lists.find((l) => l.id === listFilter)?.name ?? "All"}`;
   const showLabel: Record<CalendarShow, string> = {
     both: "Show both",
@@ -595,6 +648,20 @@ export default function CalendarView({
           <option value="due">{displayModeLabel.due}</option>
           <option value="start">{displayModeLabel.start}</option>
           <option value="range">{displayModeLabel.range}</option>
+        </select>
+        <select
+          className="due-filter-select"
+          value={eventDisplayMode}
+          disabled={!showEvents}
+          title="How event dates are drawn on the calendar"
+          style={{ width: selectWidth(eventDisplayModeLabel[eventDisplayMode]) }}
+          onFocus={() => setEventDisplayModeFocused(true)}
+          onBlur={() => setEventDisplayModeFocused(false)}
+          onChange={(e) => setEventDisplayMode(e.target.value as EventDisplayMode)}
+        >
+          <option value="end">{eventDisplayModeLabel.end}</option>
+          <option value="start">{eventDisplayModeLabel.start}</option>
+          <option value="range">{eventDisplayModeLabel.range}</option>
         </select>
         <select
           className="due-filter-select"

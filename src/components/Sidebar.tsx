@@ -23,6 +23,7 @@ interface Props {
   onForceAddingHandled?: () => void;
   onDeleteList: (id: string) => void;
   onRemoveList: (id: string) => void;
+  onRenameList: (id: string, name: string) => void;
   onSyncList: (accountId: string) => void;
   smartFilters?: SidebarSmartFilter[];
   onApplyFilter?: (f: any) => void;
@@ -52,6 +53,7 @@ export default function Sidebar({
   onForceAddingHandled,
   onDeleteList,
   onRemoveList,
+  onRenameList,
   onSyncList,
   smartFilters = [],
   onApplyFilter,
@@ -65,12 +67,32 @@ export default function Sidebar({
   const [name, setName] = useState("");
   const [listTarget, setListTarget] = useState("local"); // "local" or accountId
   const [listMenu, setListMenu] = useState<{ x: number; y: number; list: TaskList } | null>(null);
+  // Inline rename: the list whose name is being edited, plus the working text.
+  const [editingListId, setEditingListId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+
+  function submitRename(l: TaskList) {
+    const n = editName.trim();
+    if (n && n !== l.name) onRenameList(l.id, n);
+    setEditingListId(null);
+    setEditName("");
+  }
+
+  /** Open the "new list" form, defaulting its destination to the first CalDAV
+   *  account so new lists sync by default -- "Local only" stays a deliberate
+   *  choice in the dropdown rather than the silent default. */
+  function openAddList() {
+    setListTarget(accounts.length > 0 ? accounts[0].id : "local");
+    setName("");
+    setAdding(true);
+  }
 
   useEffect(() => {
     if (forceAdding) {
-      setAdding(true);
+      openAddList();
       onForceAddingHandled?.();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [forceAdding]);
 
   // Must come after all hooks above (Rules of Hooks) -- an early return
@@ -140,22 +162,40 @@ export default function Sidebar({
         )}
         <div style={{ height: 8 }} />
         {lists.map((l) => (
-          <div
-            key={l.id}
-            className={`sidebar-item ${selectedListId === l.id ? "active" : ""}`}
-            style={{ "--accent": l.color } as any}
-            onClick={() => onSelect(l.id)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setListMenu({ x: e.clientX, y: e.clientY, list: l });
-            }}
-          >
-            <span className="sidebar-dot" style={{ background: l.color }} />
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
-              {l.name}{l.caldav_calendar_url ? " ⇄" : ""}
-            </span>
-            {openCount(l.id) > 0 && <span className="count">{openCount(l.id)}</span>}
-          </div>
+          editingListId === l.id ? (
+            <div key={l.id} className="sidebar-item" style={{ "--accent": l.color } as any}>
+              <span className="sidebar-dot" style={{ background: l.color }} />
+              <input
+                autoFocus
+                style={{ flex: 1, minWidth: 0, background: "#26272a", border: "1px solid #34353a", borderRadius: 6, color: "#fff", padding: "2px 6px" }}
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submitRename(l);
+                  if (e.key === "Escape") { setEditingListId(null); setEditName(""); }
+                }}
+                onBlur={() => submitRename(l)}
+              />
+            </div>
+          ) : (
+            <div
+              key={l.id}
+              className={`sidebar-item ${selectedListId === l.id ? "active" : ""}`}
+              style={{ "--accent": l.color } as any}
+              onClick={() => onSelect(l.id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setListMenu({ x: e.clientX, y: e.clientY, list: l });
+              }}
+            >
+              <span className="sidebar-dot" style={{ background: l.color }} />
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                {l.name}{l.caldav_calendar_url ? " ⇄" : ""}
+              </span>
+              {openCount(l.id) > 0 && <span className="count">{openCount(l.id)}</span>}
+            </div>
+          )
         ))}
         {adding ? (
           <div style={{ padding: "6px 14px" }}>
@@ -187,7 +227,7 @@ export default function Sidebar({
             )}
           </div>
         ) : (
-          <button className="sidebar-add" onClick={() => setAdding(true)}>+ New list</button>
+          <button className="sidebar-add" onClick={openAddList}>+ New list</button>
         )}
       </div>
       <div className="sidebar-footer">
@@ -213,6 +253,10 @@ export default function Sidebar({
                     : { label: `Show only "${listMenu.list.name}" in Calendar`, onClick: () => onSetCalendarListFilter(listMenu.list.id) }
                 ]
               : []),
+            {
+              label: "Rename",
+              onClick: () => { setEditingListId(listMenu.list.id); setEditName(listMenu.list.name); }
+            },
             {
               label: "Remove list",
               danger: true,

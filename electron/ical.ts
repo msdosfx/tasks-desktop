@@ -181,6 +181,30 @@ function icalTimeToString(t: ICAL.Time): string {
   return jsDate.toISOString();
 }
 
+/** Shift a date-only "YYYY-MM-DD" by whole days (UTC-anchored, so no DST/offset
+ *  drift). Used to convert between iCalendar's EXCLUSIVE all-day DTEND and the
+ *  INCLUSIVE last-day convention the app stores/edits/renders internally. */
+function shiftDateOnly(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr.slice(0, 10)}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** DTEND to write for a stored INCLUSIVE end. All-day ends (date-only) are the
+ *  last day the event covers; iCalendar's DTEND is EXCLUSIVE, so emit the day
+ *  after. Timed ends are exact instants and pass through unchanged. */
+function endDateToIcalTime(endDate: string): ICAL.Time {
+  return dateStringToIcalTime(endDate.length <= 10 ? shiftDateOnly(endDate, 1) : endDate);
+}
+
+/** Inverse of endDateToIcalTime: turn a parsed DTEND into the stored value.
+ *  All-day (isDate) DTEND is exclusive on the wire, so store the inclusive last
+ *  day (one day earlier). Timed ends pass through. */
+function icalDtendToString(t: ICAL.Time): string {
+  const s = icalTimeToString(t);
+  return t.isDate ? shiftDateOnly(s, -1) : s;
+}
+
 function normalizePriority(p: number): 0 | 1 | 5 | 9 {
   if (!p) return 0;
   if (p <= 4) return 1;
@@ -247,7 +271,7 @@ export function eventToVEvent(
   vevent.updatePropertyWithValue("sequence", event.sequence ?? 0);
   vevent.updatePropertyWithValue("dtstart", dateStringToIcalTime(event.start_date));
   if (event.end_date) {
-    vevent.updatePropertyWithValue("dtend", dateStringToIcalTime(event.end_date));
+    vevent.updatePropertyWithValue("dtend", endDateToIcalTime(event.end_date));
   }
   if (event.recurrence) {
     try {
@@ -291,7 +315,7 @@ export function eventToVEvent(
       ex.updatePropertyWithValue("sequence", event.sequence ?? 0);
       ex.updatePropertyWithValue("dtstart", dateStringToIcalTime(ov.start_date));
       if (ov.end_date) {
-        ex.updatePropertyWithValue("dtend", dateStringToIcalTime(ov.end_date));
+        ex.updatePropertyWithValue("dtend", endDateToIcalTime(ov.end_date));
       }
       comp.addSubcomponent(ex);
     }
@@ -353,7 +377,7 @@ export function parseVEvent(ics: string): ParsedVEvent | null {
         notes: (v.getFirstPropertyValue("description") as string) || "",
         location: (v.getFirstPropertyValue("location") as string) || "",
         start_date: icalTimeToString(ovStart),
-        end_date: ovEnd ? icalTimeToString(ovEnd) : null,
+        end_date: ovEnd ? icalDtendToString(ovEnd) : null,
         all_day: ovStart.isDate ? 1 : 0
       });
     }
@@ -364,7 +388,7 @@ export function parseVEvent(ics: string): ParsedVEvent | null {
       notes,
       location,
       start_date: icalTimeToString(dtstart),
-      end_date: dtend ? icalTimeToString(dtend) : null,
+      end_date: dtend ? icalDtendToString(dtend) : null,
       all_day: dtstart.isDate ? 1 : 0,
       recurrence,
       tags,
