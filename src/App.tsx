@@ -130,6 +130,11 @@ export default function App() {
     const fresh = await window.api.tasks.all();
     setTasks(fresh);
     if (selectedTaskId && !fresh.some((t) => t.id === selectedTaskId)) selectTask(null);
+    // Events can also be undone (delete/edit/create), so refresh them too and
+    // fix the event selection if the undone action changed what exists.
+    const freshEvents = (await window.api.events?.all()) ?? [];
+    setEvents(freshEvents);
+    if (selectedEventId && !freshEvents.some((e) => e.id === selectedEventId)) selectEvent(null);
     scheduleDirtySync();
   }
   // Keep a live ref so the menu's IPC listener (registered once) always calls
@@ -471,12 +476,19 @@ export default function App() {
     selectEvent(e.id);
     setFocusTitleId(e.id);
     scheduleDirtySync();
+    // Undo a just-created event by removing it outright (it isn't on the server yet).
+    lastActionRef.current = async () => { await window.api.events?.delete(e.id, true); };
   }
 
   async function updateEvent(id: string, patch: Partial<CalendarEvent>) {
+    const prev = events.find((e) => e.id === id);
+    const before = prev
+      ? (Object.fromEntries(Object.keys(patch).map((k) => [k, (prev as any)[k]])) as Partial<CalendarEvent>)
+      : null;
     await window.api.events?.update(id, patch);
     await loadEvents();
     scheduleDirtySync();
+    if (before) lastActionRef.current = async () => { await window.api.events?.update(id, before); };
   }
 
   async function deleteEvent(id: string) {
@@ -484,6 +496,8 @@ export default function App() {
     if (selectedEventId === id) selectEvent(null);
     await loadEvents();
     scheduleDirtySync();
+    // Soft delete (deleted=1); undo just clears the flag, same as tasks.
+    lastActionRef.current = async () => { await window.api.events?.update(id, { deleted: 0 } as Partial<CalendarEvent>); };
   }
 
   async function createContact() {
