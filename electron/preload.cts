@@ -13,7 +13,8 @@ const api = {
     all: () => ipcRenderer.invoke("lists:all"),
     create: (name: string, color?: string) => ipcRenderer.invoke("lists:create", name, color),
     update: (id: string, patch: any) => ipcRenderer.invoke("lists:update", id, patch),
-    delete: (id: string) => ipcRenderer.invoke("lists:delete", id)
+    delete: (id: string) => ipcRenderer.invoke("lists:delete", id),
+    export: (id: string) => ipcRenderer.invoke("lists:export", id)
   },
   tasks: {
     all: () => ipcRenderer.invoke("tasks:all"),

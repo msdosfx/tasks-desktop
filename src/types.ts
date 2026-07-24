@@ -198,6 +198,7 @@ declare global {
         create: (name: string, color?: string) => Promise<TaskList>;
         update: (id: string, patch: Partial<TaskList>) => Promise<TaskList>;
         delete: (id: string) => Promise<void>;
+        export: (id: string) => Promise<{ ok: boolean; canceled?: boolean; count?: number; path?: string }>;
       };
       tasks: {
         all: () => Promise<Task[]>;

@@ -24,6 +24,7 @@ interface Props {
   onDeleteList: (id: string) => void;
   onRemoveList: (id: string) => void;
   onRenameList: (id: string, name: string) => void;
+  onExportList: (id: string) => void;
   onSyncList: (accountId: string) => void;
   smartFilters?: SidebarSmartFilter[];
   onApplyFilter?: (f: any) => void;
@@ -54,6 +55,7 @@ export default function Sidebar({
   onDeleteList,
   onRemoveList,
   onRenameList,
+  onExportList,
   onSyncList,
   smartFilters = [],
   onApplyFilter,
@@ -256,6 +258,10 @@ export default function Sidebar({
             {
               label: "Rename",
               onClick: () => { setEditingListId(listMenu.list.id); setEditName(listMenu.list.name); }
+            },
+            {
+              label: "Export to .ics…",
+              onClick: () => onExportList(listMenu.list.id)
             },
             {
               label: "Remove list",

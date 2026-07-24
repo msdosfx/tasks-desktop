@@ -26,6 +26,7 @@ import {
   settingsAll,
   settingSet,
   eventsAll,
+  eventsByList,
   eventCreate,
   eventUpdate,
   eventDelete,
@@ -48,6 +49,7 @@ import {
   dedupeDatabase
 } from "./db.js";
 import { testConnection, discoverCalendars, linkListToCalendar, unlinkList, syncAccount, createServerCalendar, encryptPassword, connectCalendar, syncLog } from "./caldav.js";
+import { taskToVTodo, eventToVEvent, bundleIcs } from "./ical.js";
 import { discoverAddressBooks, linkAddressBook, unlinkAddressBook, syncAccountContacts, connectAddressBook, importVCards } from "./carddav.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -423,6 +425,37 @@ function registerIpc() {
   ipcMain.handle("lists:create", (_e, name: string, color?: string) => listCreate(name, color));
   ipcMain.handle("lists:update", (_e, id: string, patch: any) => listUpdate(id, patch));
   ipcMain.handle("lists:delete", (_e, id: string) => listDelete(id));
+  ipcMain.handle("lists:export", async (_e, listId: string) => {
+    const list = listsAll().find((l) => l.id === listId);
+    if (!list) throw new Error("List not found");
+    // Serialize every task (VTODO) and event (VEVENT) in the list the same way
+    // the sync push does -- reminders as VALARMs, and recurring events with their
+    // exdates/overrides -- then bundle into one VCALENDAR.
+    const items: string[] = [];
+    for (const t of tasksByList(listId)) {
+      const offsets = remindersForOwner("task", t.id).map((r) => r.offset_minutes);
+      items.push(taskToVTodo(t, undefined, offsets).ics);
+    }
+    for (const ev of eventsByList(listId)) {
+      const offsets = remindersForOwner("event", ev.id).map((r) => r.offset_minutes);
+      const exdates = (() => { try { return JSON.parse(ev.exdates || "[]"); } catch { return []; } })();
+      const overrides = (() => { try { return JSON.parse(ev.overrides || "[]"); } catch { return []; } })();
+      items.push(eventToVEvent(ev, undefined, offsets, exdates, overrides).ics);
+    }
+    const ics = bundleIcs(items);
+
+    const slug = list.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "list";
+    const stamp = new Date().toISOString().slice(0, 10);
+    const res = await dialog.showSaveDialog(mainWindow!, {
+      title: "Export List",
+      defaultPath: path.join(app.getPath("desktop"), `${slug}-${stamp}.ics`),
+      filters: [{ name: "iCalendar", extensions: ["ics"] }]
+    });
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(res.filePath, ics, "utf8");
+    shell.showItemInFolder(res.filePath);
+    return { ok: true, count: items.length, path: res.filePath };
+  });
 
   ipcMain.handle("tasks:all", () => tasksAll());
   ipcMain.handle("tasks:byList", (_e, listId: string) => tasksByList(listId));

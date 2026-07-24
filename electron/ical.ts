@@ -205,6 +205,24 @@ function icalDtendToString(t: ICAL.Time): string {
   return t.isDate ? shiftDateOnly(s, -1) : s;
 }
 
+/** Merge many single-item VCALENDAR strings (as produced by taskToVTodo /
+ *  eventToVEvent) into ONE VCALENDAR containing all their VTODO/VEVENT
+ *  components -- used to export a whole list to a single .ics file that other
+ *  clients (Thunderbird, Apple, any CalDAV app) can import. VALARM subcomponents
+ *  ride along inside their parent component. Malformed items are skipped. */
+export function bundleIcs(icsStrings: string[]): string {
+  const cal = new ICAL.Component(["vcalendar", [], []]);
+  cal.updatePropertyWithValue("prodid", "-//Tasks Desktop//Export//EN");
+  cal.updatePropertyWithValue("version", "2.0");
+  for (const s of icsStrings) {
+    try {
+      const inner = new ICAL.Component(ICAL.parse(s));
+      for (const sub of inner.getAllSubcomponents()) cal.addSubcomponent(sub);
+    } catch { /* skip a malformed item rather than fail the whole export */ }
+  }
+  return cal.toString();
+}
+
 function normalizePriority(p: number): 0 | 1 | 5 | 9 {
   if (!p) return 0;
   if (p <= 4) return 1;

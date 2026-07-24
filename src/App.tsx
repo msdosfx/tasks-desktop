@@ -768,6 +768,19 @@ export default function App() {
     await loadLists();
   }
 
+  async function exportList(id: string) {
+    try {
+      const res = await window.api.lists.export(id);
+      if (res?.ok) {
+        setSyncMsg(`Exported ${res.count} item(s) to ${res.path}`);
+        setTimeout(() => setSyncMsg(null), 5000);
+      }
+    } catch (err: any) {
+      setSyncMsg(`Export failed: ${err?.message || err}`);
+      setTimeout(() => setSyncMsg(null), 6000);
+    }
+  }
+
   async function removeList(id: string) {
     // Unlink from CalDAV first so no future sync touches the server,
     // then hard-delete the list and its tasks locally.
@@ -891,6 +904,7 @@ export default function App() {
         onDeleteList={deleteList}
         onRemoveList={removeList}
         onRenameList={renameList}
+        onExportList={exportList}
         onSyncList={syncListAccount}
         onOpenSettings={() => setShowSettings(true)}
         onSync={() => runSync()}
