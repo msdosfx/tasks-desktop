@@ -78,6 +78,11 @@ export default function App() {
   // One-shot signal: the id of a task/event just created, so its detail panel
   // focuses+selects the title field. Cleared once the panel consumes it.
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null);
+  // User-chosen default destinations for new tasks/events (from Settings). Empty
+  // = no explicit choice; the fallback chain in defaultListId/defaultEventListId
+  // then prefers a synced list over a local one.
+  const [defaultTaskList, setDefaultTaskList] = useState("");
+  const [defaultEventList, setDefaultEventList] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [addressBooks, setAddressBooks] = useState<AddressBook[]>([]);
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
@@ -228,6 +233,8 @@ export default function App() {
     window.api.settings?.all().then((s: Record<string, string>) => {
       const v = parseInt(s.syncIntervalMinutes ?? "60", 10);
       setSyncEveryMin(Number.isFinite(v) && v >= 0 ? v : 60);
+      setDefaultTaskList(s.defaultTaskListId ?? "");
+      setDefaultEventList(s.defaultEventListId ?? "");
     }).catch(() => {});
   }, [showSettings]);
 
@@ -443,17 +450,28 @@ export default function App() {
   const selectedTask = tasks.find((t) => t.id === selectedTaskId) || null;
   const subtasksOfSelected = selectedTask ? tasks.filter((t) => t.parent_id === selectedTask.id) : [];
 
+  /** Fallback when no explicit default/context applies: prefer a synced list
+   *  (one linked to a CalDAV calendar) over a local-only one, so new items don't
+   *  silently land somewhere that never syncs. Last resort is the first list. */
+  function firstSyncedListId(): string {
+    return lists.find((l) => l.caldav_calendar_url)?.id ?? lists[0]?.id;
+  }
+
   function defaultListId(): string {
+    // The list you're currently viewing wins (creating there is intentional).
     if (typeof scope === "string" && scope !== "all" && scope !== "today") return scope;
-    return lists[0]?.id;
+    // Otherwise the configured default, if it still exists; else synced-first.
+    if (defaultTaskList && lists.some((l) => l.id === defaultTaskList)) return defaultTaskList;
+    return firstSyncedListId();
   }
 
   /** Prefers the calendar's isolated-list filter (right-click "Show only…")
    *  when one is set, since that's the calendar the user is currently looking
-   *  at; otherwise falls back to the first list, same as tasks. */
+   *  at; otherwise the configured default calendar, else synced-first. */
   function defaultEventListId(): string {
     if (calendarListFilter !== "all") return calendarListFilter;
-    return lists[0]?.id;
+    if (defaultEventList && lists.some((l) => l.id === defaultEventList)) return defaultEventList;
+    return firstSyncedListId();
   }
 
   async function createEventOnDate(dateStr: string) {

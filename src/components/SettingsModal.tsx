@@ -572,6 +572,26 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
 
           {activePane === "calendars" && (
             <>
+              <div className="prefs-grid" style={{ marginBottom: 14 }}>
+                <label className="pref-row" title="Where a new task goes when you're not already viewing a specific list.">
+                  Default list for new tasks
+                  <select value={prefs.defaultTaskListId ?? ""} onChange={(e) => setPref("defaultTaskListId", e.target.value)}>
+                    <option value="">Auto (first synced list)</option>
+                    {lists.map((l) => (
+                      <option key={l.id} value={l.id}>{l.name}{l.caldav_calendar_url ? "" : " (local)"}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="pref-row" title="Where a new event goes when you're not filtered to a specific calendar.">
+                  Default calendar for new events
+                  <select value={prefs.defaultEventListId ?? ""} onChange={(e) => setPref("defaultEventListId", e.target.value)}>
+                    <option value="">Auto (first synced list)</option>
+                    {lists.map((l) => (
+                      <option key={l.id} value={l.id}>{l.name}{l.caldav_calendar_url ? "" : " (local)"}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#9aa0a6", marginBottom: 10 }}>
                 <input type="checkbox" checked={advancedLinking} onChange={(e) => setAdvancedLinking(e.target.checked)} />
                 Additional list linking options (link a calendar to an existing list)
