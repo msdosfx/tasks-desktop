@@ -458,6 +458,23 @@ input, textarea, select { user-select: text; }
   justify-content: flex-end;
   gap: 10px;
 }
+/* Paned Settings: left nav + scrollable content pane. */
+.settings-modal-paned { width: 760px; max-width: 92vw; padding: 0; display: flex; overflow: hidden; }
+.settings-nav {
+  width: 190px; flex-shrink: 0; background: #232326; border-right: 1px solid #34353a;
+  padding: 16px 10px; display: flex; flex-direction: column; gap: 2px; max-height: 80vh;
+}
+.settings-nav-title { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8a8d93; padding: 0 8px 8px; }
+.settings-nav-item {
+  text-align: left; background: none; border: none; color: #cfd2d6;
+  padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.settings-nav-item:hover { background: #2a2b2f; }
+.settings-nav-item.active { background: #2a3b4d; color: #fff; }
+.settings-nav-about { margin-top: auto; font-size: 11px; color: #8a8d93; padding: 12px 8px 0; line-height: 1.5; }
+.settings-pane { flex: 1; min-width: 0; overflow-y: auto; max-height: 80vh; padding: 20px 22px; }
+.settings-pane h2 { margin-top: 0; }
+
 .settings-tools { display: flex; flex-wrap: wrap; gap: 8px; }
 .settings-tools button { padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; border: 1px solid #34353a; background: #26272a; color: #e6e6e6; }
 .settings-tools button:disabled { opacity: .5; cursor: default; }

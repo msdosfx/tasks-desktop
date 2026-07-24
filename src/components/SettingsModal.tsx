@@ -52,6 +52,8 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
   const [version, setVersion] = useState<string>("");
   const [update, setUpdate] = useState<{ state: string; detail?: any } | null>(null);
   const [prefs, setPrefs] = useState<Record<string, string>>({});
+  type Pane = "accounts" | "calendars" | "contacts" | "sync" | "notifications";
+  const [activePane, setActivePane] = useState<Pane>("accounts");
 
   useEffect(() => {
     window.api.app?.version().then(setVersion).catch(() => {});
@@ -372,189 +374,271 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
     }
   }
 
-  return (
-    <div className="overlay">
-      <div className="settings-modal" style={{ position: "relative" }}>
-        <button className="modal-close" onClick={onClose}>×</button>
-        <h2>CalDAV / CardDAV accounts</h2>
-        <p style={{ color: "#9aa0a6", fontSize: 12 }}>
-          Connect a CalDAV server (Nextcloud, Tasks.org sync provider, DAVx5-compatible server, etc.) to sync tasks
-          with your existing Tasks.org setup.
-        </p>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#9aa0a6", marginBottom: 10 }}>
-          <input type="checkbox" checked={advancedLinking} onChange={(e) => setAdvancedLinking(e.target.checked)} />
-          Additional list linking options (link a calendar to an existing list)
-        </label>
+  const PANES: { id: Pane; label: string }[] = [
+    { id: "accounts", label: "Accounts" },
+    { id: "calendars", label: "Calendars & Lists" },
+    { id: "contacts", label: "Contacts" },
+    { id: "sync", label: "Sync" },
+    { id: "notifications", label: "Notifications & Startup" }
+  ];
+  const pendingCount = Object.keys(pendingByCal).length + Object.keys(pendingByBook).length;
+  const linkedCalCount = (acc: CaldavAccountPublic) =>
+    (calendarsByAccount[acc.id] ?? []).filter((c) => lists.some((l) => sameDavUrl(l.caldav_calendar_url, c.url))).length;
+  const linkedBookCount = (acc: CaldavAccountPublic) =>
+    (addressBooksByAccount[acc.id] ?? []).filter((bk) => addressBooks.some((ab) => sameDavUrl(ab.carddav_addressbook_url, bk.url))).length;
 
-        {accounts.map((acc) => (
-          <div className="account-card" key={acc.id}>
-            <div className="row">
-              <strong>{acc.label}</strong>
-              <div>
-                <button onClick={() => test(acc)} disabled={busy}>Test</button>{" "}
-                <button onClick={() => discover(acc.id)} disabled={busy}>Find calendars</button>{" "}
-                <button onClick={() => syncNow(acc.id)} disabled={busy}>Sync now</button>{" "}
-                <button onClick={() => removeAccount(acc.id)} disabled={busy}>Remove</button>
-              </div>
-            </div>
-            <div className="status">{acc.server_url} — {acc.username}</div>
-            {acc.last_sync_at && (
-              <div className={`status ${acc.last_sync_status === "error" ? "error" : ""}`}>
-                Last sync: {new Date(acc.last_sync_at).toLocaleString()} ({acc.last_sync_status})
-              </div>
-            )}
-            {calendarsByAccount[acc.id]?.map((cal) => {
-              const linkedList = lists.find((l) => sameDavUrl(l.caldav_calendar_url, cal.url));
-              const current = linkedList?.id ?? "";
-              const isConnected = current !== "";
-              const pending = pendingByCal[cal.url];
-              const selected = pending ?? current;
-              const dirty = pending !== undefined;
-              return (
-                <div className="calendar-pick" key={cal.url}>
-                  <span>{cal.displayName}</span>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    {dirty && <span style={{ fontSize: 11, color: "#e8a23d" }}>Unsaved</span>}
-                    <select
-                      value={selected}
-                      disabled={busy}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setPendingByCal((prev) => {
-                          const next = { ...prev };
-                          if (val === current) delete next[cal.url];
-                          else next[cal.url] = val;
-                          return next;
-                        });
-                      }}
-                    >
-                      {isConnected ? (
-                        <>
-                          <option value={current} disabled>Connected</option>
-                          <option value="">Not linked</option>
-                        </>
-                      ) : (
-                        <>
-                          <option value="">Not linked</option>
-                          <option value="__new__">Connected</option>
-                        </>
-                      )}
-                      {advancedLinking &&
-                        lists.filter((l) => l.id !== current).map((l) => (
-                          <option key={l.id} value={l.id}>Add to {l.name}</option>
-                        ))}
-                    </select>
-                  </div>
-                </div>
-              );
-            })}
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #2c2d30" }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: "#9aa0a6", marginBottom: 6 }}>Contacts (CardDAV)</div>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <input
-                  style={{ flex: 1, background: "#26272a", border: "1px solid #34353a", borderRadius: 6, color: "#e6e6e6", padding: "5px 8px", fontSize: 12 }}
-                  placeholder="CardDAV URL (e.g. http://host:5000/carddav.php/…)"
-                  value={carddavUrlByAccount[acc.id] ?? (acc.carddav_url || "")}
-                  onChange={(e) => setCarddavUrlByAccount((prev) => ({ ...prev, [acc.id]: e.target.value }))}
-                />
-                <button onClick={() => discoverBooks(acc.id)} disabled={busy}>Find address books</button>
-              </div>
-              {addressBooksByAccount[acc.id]?.map((book) => {
-                const linkedBook = addressBooks.find((ab) => sameDavUrl(ab.carddav_addressbook_url, book.url));
-                const current = linkedBook?.id ?? "";
-                const isConnected = current !== "";
-                const pending = pendingByBook[book.url];
-                const selected = pending ?? current;
-                const dirty = pending !== undefined;
-                return (
-                  <div className="calendar-pick" key={book.url}>
-                    <span>{book.displayName}</span>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      {dirty && <span style={{ fontSize: 11, color: "#e8a23d" }}>Unsaved</span>}
-                      <select
-                        value={selected}
-                        disabled={busy}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setPendingByBook((prev) => {
-                            const next = { ...prev };
-                            if (val === current) delete next[book.url];
-                            else next[book.url] = val;
-                            return next;
-                          });
-                        }}
-                      >
-                        {isConnected ? (
-                          <>
-                            <option value={current} disabled>Connected</option>
-                            <option value="">Not linked</option>
-                          </>
-                        ) : (
-                          <>
-                            <option value="">Not linked</option>
-                            <option value="__new__">Connected</option>
-                          </>
-                        )}
-                      </select>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-
-        {accounts.length > 0 && (() => {
-          const pendingCount = Object.keys(pendingByCal).length + Object.keys(pendingByBook).length;
-          return (
-            <div className="settings-save-bar">
-              {pendingCount > 0 && (
-                <span style={{ fontSize: 12, color: "#9aa0a6" }}>
-                  {pendingCount} unsaved change{pendingCount === 1 ? "" : "s"}
-                </span>
+  /** Per-account calendar-link rows -- rendered in the Calendars & Lists pane. */
+  function renderCalendarRows(acc: CaldavAccountPublic) {
+    const cals = calendarsByAccount[acc.id];
+    if (!cals || cals.length === 0) return <div className="status">No calendars discovered yet — use "Find calendars" on the Accounts tab.</div>;
+    return cals.map((cal) => {
+      const linkedList = lists.find((l) => sameDavUrl(l.caldav_calendar_url, cal.url));
+      const current = linkedList?.id ?? "";
+      const isConnected = current !== "";
+      const pending = pendingByCal[cal.url];
+      const selected = pending ?? current;
+      const dirty = pending !== undefined;
+      return (
+        <div className="calendar-pick" key={cal.url}>
+          <span>{cal.displayName}</span>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {dirty && <span style={{ fontSize: 11, color: "#e8a23d" }}>Unsaved</span>}
+            <select
+              value={selected}
+              disabled={busy}
+              onChange={(e) => {
+                const val = e.target.value;
+                setPendingByCal((prev) => {
+                  const next = { ...prev };
+                  if (val === current) delete next[cal.url];
+                  else next[cal.url] = val;
+                  return next;
+                });
+              }}
+            >
+              {isConnected ? (
+                <>
+                  <option value={current} disabled>Connected</option>
+                  <option value="">Not linked</option>
+                </>
+              ) : (
+                <>
+                  <option value="">Not linked</option>
+                  <option value="__new__">Connected</option>
+                </>
               )}
-              <button
-                className="primary"
-                disabled={busy || pendingCount === 0}
-                onClick={saveAllChanges}
-              >
-                Save changes
-              </button>
+              {advancedLinking &&
+                lists.filter((l) => l.id !== current).map((l) => (
+                  <option key={l.id} value={l.id}>Add to {l.name}</option>
+                ))}
+            </select>
+          </div>
+        </div>
+      );
+    });
+  }
+
+  /** Per-account CardDAV URL + address-book-link rows -- Contacts pane. */
+  function renderContactBlock(acc: CaldavAccountPublic) {
+    return (
+      <div style={{ display: "flex", gap: 6, flexDirection: "column" }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", width: "100%" }}>
+          <input
+            style={{ flex: 1, background: "#26272a", border: "1px solid #34353a", borderRadius: 6, color: "#e6e6e6", padding: "5px 8px", fontSize: 12 }}
+            placeholder="CardDAV URL (e.g. http://host:5000/carddav.php/…)"
+            value={carddavUrlByAccount[acc.id] ?? (acc.carddav_url || "")}
+            onChange={(e) => setCarddavUrlByAccount((prev) => ({ ...prev, [acc.id]: e.target.value }))}
+          />
+          <button onClick={() => discoverBooks(acc.id)} disabled={busy}>Find address books</button>
+        </div>
+        {addressBooksByAccount[acc.id]?.map((book) => {
+          const linkedBook = addressBooks.find((ab) => sameDavUrl(ab.carddav_addressbook_url, book.url));
+          const current = linkedBook?.id ?? "";
+          const isConnected = current !== "";
+          const pending = pendingByBook[book.url];
+          const selected = pending ?? current;
+          const dirty = pending !== undefined;
+          return (
+            <div className="calendar-pick" key={book.url} style={{ width: "100%" }}>
+              <span>{book.displayName}</span>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {dirty && <span style={{ fontSize: 11, color: "#e8a23d" }}>Unsaved</span>}
+                <select
+                  value={selected}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setPendingByBook((prev) => {
+                      const next = { ...prev };
+                      if (val === current) delete next[book.url];
+                      else next[book.url] = val;
+                      return next;
+                    });
+                  }}
+                >
+                  {isConnected ? (
+                    <>
+                      <option value={current} disabled>Connected</option>
+                      <option value="">Not linked</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="">Not linked</option>
+                      <option value="__new__">Connected</option>
+                    </>
+                  )}
+                </select>
+              </div>
             </div>
           );
-        })()}
+        })}
+      </div>
+    );
+  }
 
-        <label
-          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#9aa0a6", marginTop: 12 }}
-          title="Enable if your server uses a self-signed certificate (e.g. Synology DSM over HTTPS on your LAN). Turns off certificate verification for the app's sync connections — only use on servers you trust."
-        >
-          <input
-            type="checkbox"
-            checked={prefs.allowInsecureCerts === "1"}
-            onChange={(e) => setPref("allowInsecureCerts", e.target.checked ? "1" : "0")}
-          />
-          Allow self-signed certificates (self-hosted servers on your LAN)
-        </label>
+  const saveBar = pendingCount > 0 ? (
+    <div className="settings-save-bar">
+      <span style={{ fontSize: 12, color: "#9aa0a6" }}>
+        {pendingCount} unsaved change{pendingCount === 1 ? "" : "s"}
+      </span>
+      <button className="primary" disabled={busy} onClick={saveAllChanges}>Save changes</button>
+    </div>
+  ) : null;
 
-        <h3 style={{ marginTop: 18 }}>Contacts &amp; maintenance</h3>
-        <div className="settings-tools">
-          <button
-            disabled={busy}
-            onClick={repairDuplicates}
-            title="Consolidates duplicate task lists and address books left over from connect/disconnect cycles, and removes exact-duplicate contact rows. Shows a preview and asks before applying. Never deletes tasks or your contacts on the server."
-          >
-            Repair duplicate lists &amp; books
-          </button>
-          <button onClick={onReviewDuplicates} title="Review possible duplicate contacts and merge them manually — this is where contacts are combined.">
-            Merge duplicates…
-          </button>
-          <button onClick={onImportVCard} title="Import contacts from a .vcf file, optionally adding a label to all of them.">
-            Import from vCard…
-          </button>
-        </div>
+  return (
+    <div className="overlay">
+      <div className="settings-modal settings-modal-paned" style={{ position: "relative" }}>
+        <button className="modal-close" onClick={onClose}>×</button>
+        <nav className="settings-nav">
+          <div className="settings-nav-title">Settings</div>
+          {PANES.map((p) => (
+            <button
+              key={p.id}
+              className={`settings-nav-item ${activePane === p.id ? "active" : ""}`}
+              onClick={() => setActivePane(p.id)}
+            >
+              {p.label}
+            </button>
+          ))}
+          <div className="settings-nav-about">
+            <div>Tasks Desktop{version ? ` v${version}` : ""}</div>
+            <div style={{ marginTop: 4 }}>
+              {update?.state === "checking" && "Checking for updates…"}
+              {update?.state === "none" && "Up to date"}
+              {update?.state === "available" && `Downloading v${update.detail}…`}
+              {update?.state === "downloading" && `Downloading update… ${update.detail}%`}
+              {update?.state === "error" && `Update check failed: ${update.detail}`}
+              {update?.state === "downloaded" && (
+                <button className="primary" onClick={() => window.api.app?.installUpdate()}>
+                  Restart to update to v{update.detail}
+                </button>
+              )}
+            </div>
+          </div>
+        </nav>
 
-        <h3 style={{ marginTop: 18 }}>Add account</h3>
-        <div className="form-grid">
+        <div className="settings-pane">
+          <h2>{PANES.find((p) => p.id === activePane)?.label}</h2>
+
+          {activePane === "accounts" && (
+            <>
+              <p style={{ color: "#9aa0a6", fontSize: 12 }}>
+                Connect a CalDAV server (Nextcloud, Tasks.org sync provider, DAVx5-compatible server, etc.).
+                One account's credentials are shared by its calendars and contacts.
+              </p>
+              {accounts.length === 0 && <div className="status">No accounts yet — add one below.</div>}
+              {accounts.map((acc) => (
+                <div className="account-card" key={acc.id}>
+                  <div className="row">
+                    <strong>{acc.label}</strong>
+                    <div>
+                      <button onClick={() => test(acc)} disabled={busy}>Test</button>{" "}
+                      <button onClick={() => discover(acc.id)} disabled={busy}>Find calendars</button>{" "}
+                      <button onClick={() => syncNow(acc.id)} disabled={busy}>Sync now</button>{" "}
+                      <button onClick={() => removeAccount(acc.id)} disabled={busy}>Remove</button>
+                    </div>
+                  </div>
+                  <div className="status">{acc.server_url} — {acc.username}</div>
+                  <div className="status">{linkedCalCount(acc)} calendar(s), {linkedBookCount(acc)} address book(s) linked</div>
+                  {acc.last_sync_at && (
+                    <div className={`status ${acc.last_sync_status === "error" ? "error" : ""}`}>
+                      Last sync: {new Date(acc.last_sync_at).toLocaleString()} ({acc.last_sync_status})
+                    </div>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
+
+          {activePane === "calendars" && (
+            <>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#9aa0a6", marginBottom: 10 }}>
+                <input type="checkbox" checked={advancedLinking} onChange={(e) => setAdvancedLinking(e.target.checked)} />
+                Additional list linking options (link a calendar to an existing list)
+              </label>
+              {accounts.length === 0 && <div className="status">Add an account first (Accounts tab).</div>}
+              {accounts.map((acc) => (
+                <div className="account-card" key={acc.id}>
+                  <div className="row"><strong>{acc.label}</strong></div>
+                  {renderCalendarRows(acc)}
+                </div>
+              ))}
+            </>
+          )}
+
+          {activePane === "contacts" && (
+            <>
+              {accounts.length === 0 && <div className="status">Add an account first (Accounts tab).</div>}
+              {accounts.map((acc) => (
+                <div className="account-card" key={acc.id}>
+                  <div className="row"><strong>{acc.label}</strong></div>
+                  {renderContactBlock(acc)}
+                </div>
+              ))}
+            </>
+          )}
+
+          {(activePane === "calendars" || activePane === "contacts") && saveBar}
+
+          {activePane === "accounts" && (
+            <label
+              style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#9aa0a6", marginTop: 12 }}
+              title="Enable if your server uses a self-signed certificate (e.g. Synology DSM over HTTPS on your LAN). Turns off certificate verification for the app's sync connections — only use on servers you trust."
+            >
+              <input
+                type="checkbox"
+                checked={prefs.allowInsecureCerts === "1"}
+                onChange={(e) => setPref("allowInsecureCerts", e.target.checked ? "1" : "0")}
+              />
+              Allow self-signed certificates (self-hosted servers on your LAN)
+            </label>
+          )}
+
+          {activePane === "contacts" && (
+            <>
+              <h3 style={{ marginTop: 18 }}>Contacts &amp; maintenance</h3>
+              <div className="settings-tools">
+                <button
+                  disabled={busy}
+                  onClick={repairDuplicates}
+                  title="Consolidates duplicate task lists and address books left over from connect/disconnect cycles, and removes exact-duplicate contact rows. Shows a preview and asks before applying. Never deletes tasks or your contacts on the server."
+                >
+                  Repair duplicate lists &amp; books
+                </button>
+                <button onClick={onReviewDuplicates} title="Review possible duplicate contacts and merge them manually — this is where contacts are combined.">
+                  Merge duplicates…
+                </button>
+                <button onClick={onImportVCard} title="Import contacts from a .vcf file, optionally adding a label to all of them.">
+                  Import from vCard…
+                </button>
+              </div>
+            </>
+          )}
+
+          {activePane === "accounts" && (
+          <>
+          <h3 style={{ marginTop: 18 }}>Add account</h3>
+          <div className="form-grid">
           <input placeholder="Label (e.g. My Nextcloud)" value={label} onChange={(e) => setLabel(e.target.value)} />
           <input placeholder="Server URL — CalDAV (https://…/caldav.php/)" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
           <input placeholder="CardDAV URL — contacts (optional)" value={draftCarddavUrl} onChange={(e) => setDraftCarddavUrl(e.target.value)} />
@@ -579,12 +663,14 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
             <button onClick={testDraft} disabled={busy}>Test connection</button>
             <button className="primary" onClick={addAccount} disabled={busy}>Save account</button>
           </div>
-        </div>
-        {testMsg && <p style={{ fontSize: 12, color: "#9aa0a6" }}>{testMsg}</p>}
+          </div>
+          </>
+          )}
+          {testMsg && <p style={{ fontSize: 12, color: "#9aa0a6" }}>{testMsg}</p>}
 
-        {window.api.settings && (
-          <>
-            <h3 style={{ marginTop: 18 }}>Sync</h3>
+          {activePane === "sync" && window.api.settings && (
+            <>
+              <h3 style={{ marginTop: 18 }}>Sync</h3>
             <div className="prefs-grid">
               <label className="pref-row" title="Syncs all CalDAV accounts in the background. Manual sync (Ctrl+R) always works too.">
                 Sync automatically every
@@ -614,8 +700,12 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
                 </select>
               </label>
             </div>
+            </>
+          )}
 
-            <h3 style={{ marginTop: 18 }}>Notifications &amp; startup</h3>
+          {activePane === "notifications" && window.api.settings && (
+            <>
+              <h3 style={{ marginTop: 18 }}>Notifications &amp; startup</h3>
             <div className="prefs-grid">
               <label className="pref-row">
                 <input
@@ -654,20 +744,6 @@ export default function SettingsModal({ lists, addressBooks, onClose, onListsCha
           </>
         )}
 
-        <div className="about-row">
-          <span>Tasks Desktop{version ? ` v${version}` : ""}</span>
-          <span>
-            {update?.state === "checking" && "Checking for updates…"}
-            {update?.state === "none" && "Up to date"}
-            {update?.state === "available" && `Downloading v${update.detail}…`}
-            {update?.state === "downloading" && `Downloading update… ${update.detail}%`}
-            {update?.state === "error" && `Update check failed: ${update.detail}`}
-            {update?.state === "downloaded" && (
-              <button className="primary" onClick={() => window.api.app?.installUpdate()}>
-                Restart to update to v{update.detail}
-              </button>
-            )}
-          </span>
         </div>
       </div>
     </div>
