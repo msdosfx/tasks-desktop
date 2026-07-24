@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Task, PRIORITY_COLORS } from "../types";
 
 interface Props {
@@ -29,6 +29,21 @@ export default function TaskTable({ tasks, selectedTaskId, onSelect, onToggleCom
   const topLevel = tasks.filter((t) => !t.parent_id);
   const childrenOf = (id: string) => tasks.filter((t) => t.parent_id === id);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  // Parents whose subtasks are collapsed (hidden). Persisted so the layout
+  // survives reloads and list switches.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("collapsedSubtasks") || "[]")); } catch { return new Set(); }
+  });
+  useEffect(() => {
+    localStorage.setItem("collapsedSubtasks", JSON.stringify([...collapsed]));
+  }, [collapsed]);
+  function toggleCollapsed(id: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   if (topLevel.length === 0) {
     return <div className="empty-state">No tasks here. Press Ctrl+N to add one.</div>;
@@ -37,6 +52,7 @@ export default function TaskTable({ tasks, selectedTaskId, onSelect, onToggleCom
   function renderRow(t: Task, depth: number) {
     const due = formatDue(t.due_date);
     const children = childrenOf(t.id);
+    const isCollapsed = collapsed.has(t.id);
     return (
       <React.Fragment key={t.id}>
         <div
@@ -64,6 +80,15 @@ export default function TaskTable({ tasks, selectedTaskId, onSelect, onToggleCom
           }}
           onDragEnd={() => setDragOverId(null)}
         >
+          {children.length > 0 ? (
+            <span
+              className="subtask-toggle"
+              title={isCollapsed ? "Expand subtasks" : "Collapse subtasks"}
+              onClick={(e) => { e.stopPropagation(); toggleCollapsed(t.id); }}
+            >{isCollapsed ? "▸" : "▾"}</span>
+          ) : (
+            <span className="subtask-toggle spacer" />
+          )}
           <span
             className={`checkbox ${t.completed ? "done" : ""}`}
             onClick={(e) => { e.stopPropagation(); onToggleComplete(t.id); }}
@@ -81,7 +106,7 @@ export default function TaskTable({ tasks, selectedTaskId, onSelect, onToggleCom
             </div>
           </div>
         </div>
-        {children.map((c) => renderRow(c, depth + 1))}
+        {!isCollapsed && children.map((c) => renderRow(c, depth + 1))}
       </React.Fragment>
     );
   }

@@ -172,6 +172,13 @@ input, textarea, select { user-select: text; }
 .task-row:hover { background: #232326; }
 .task-row.selected { background: #2a3b4d; }
 .task-row.subtask { padding-left: 40px; }
+.task-row .subtask-toggle {
+  width: 14px; flex-shrink: 0; margin-top: 1px; margin-right: 2px;
+  font-size: 10px; line-height: 16px; color: #8a8d93; text-align: center;
+  cursor: pointer; user-select: none;
+}
+.task-row .subtask-toggle:hover { color: #cfd2d6; }
+.task-row .subtask-toggle.spacer { cursor: default; visibility: hidden; }
 .task-row .checkbox {
   width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #5b5c61;
   margin-top: 2px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; cursor: pointer;
