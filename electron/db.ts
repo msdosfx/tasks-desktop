@@ -459,6 +459,15 @@ export function listFindByCalendar(accountId: string, calendarUrl: string): Task
   );
 }
 
+/** Count of local edits not yet pushed to the server (dirty tasks + events +
+ *  contacts). Includes soft-deleted rows, since their deletion still needs to
+ *  propagate. Used by the "sync before closing?" prompt. */
+export function countDirtyItems(): number {
+  const db = getDb();
+  const c = (table: string) => (db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE dirty = 1`).get() as any).c as number;
+  return c("tasks") + c("events") + c("contacts");
+}
+
 export function listCreate(name: string, color = "#4a90d9"): TaskList {
   const db = getDb();
   const id = nanoid();

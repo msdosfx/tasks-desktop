@@ -11,6 +11,7 @@ import {
   listCreate,
   listUpdate,
   listDelete,
+  countDirtyItems,
   tasksAll,
   tasksByList,
   taskCreate,
@@ -65,6 +66,26 @@ const isDistinctBuild = isDev || isExperimental;
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuiting = false;
+// Set while a "sync before closing" run is in flight, so the programmatic quit
+// afterwards doesn't re-open the same prompt.
+let syncingBeforeQuit = false;
+
+/** Sync every account (calendars + contacts) before the app quits. Best-effort:
+ *  failures are logged, never block the quit. Used by the close prompt. */
+async function syncAllForQuit(): Promise<void> {
+  for (const account of accountsAll()) {
+    try {
+      await syncAccount(account);
+      const hasBooks = addressBooksAll().some((b) => b.carddav_account_id === account.id && b.carddav_addressbook_url);
+      if (hasBooks) {
+        try { await syncAccountContacts(account); } catch (err: any) { syncLog(`quit-sync carddav FAILED "${account.label}": ${err?.message || err}`); }
+      }
+      accountUpdate(account.id, { last_sync_at: new Date().toISOString(), last_sync_status: "ok" } as any);
+    } catch (err: any) {
+      syncLog(`quit-sync FAILED "${account.label}": ${err?.message || err}`);
+    }
+  }
+}
 
 const SETTING_DEFAULTS: Record<string, string> = {
   notificationsEnabled: "1",
@@ -154,6 +175,32 @@ function createWindow() {
     if (!isQuiting && getSetting("closeToTray") === "1") {
       e.preventDefault();
       mainWindow?.hide();
+      return;
+    }
+    // Real quit. If there are local edits that haven't reached the server yet,
+    // offer to sync before closing. (Skipped on the programmatic re-close after
+    // the user chose "Sync now".)
+    if (!syncingBeforeQuit && accountsAll().length > 0) {
+      const dirty = countDirtyItems();
+      if (dirty > 0) {
+        const choice = dialog.showMessageBoxSync(mainWindow!, {
+          type: "question",
+          buttons: ["Sync now", "Close without syncing", "Cancel"],
+          defaultId: 0,
+          cancelId: 2,
+          noLink: true,
+          message: "You have unsynced changes",
+          detail: `${dirty} change${dirty === 1 ? "" : "s"} haven't been pushed to the server yet.`
+        });
+        if (choice === 2) { e.preventDefault(); return; }          // Cancel — stay open
+        if (choice === 0) {                                        // Sync, then quit
+          e.preventDefault();
+          syncingBeforeQuit = true;
+          syncAllForQuit().finally(() => { isQuiting = true; app.quit(); });
+          return;
+        }
+        // choice === 1: fall through and let the window close without syncing.
+      }
     }
   });
 }
