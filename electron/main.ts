@@ -306,6 +306,15 @@ function buildMenu() {
           click: () => mainWindow?.webContents.send("shortcut:new-list")
         },
         { type: "separator" },
+        {
+          label: "Export Logs…",
+          click: () => { exportLogs(); }
+        },
+        {
+          label: "Open Logs Folder",
+          click: () => { shell.openPath(app.getPath("userData")); }
+        },
+        { type: "separator" },
         ...(isMac
           ? [{ role: "close" as const }]
           : [{
@@ -378,15 +387,6 @@ function buildMenu() {
           // Configurable so it can be changed/disabled on hotkey conflicts.
           ...(getSetting("syncHotkey") ? { accelerator: getSetting("syncHotkey") } : {}),
           click: () => mainWindow?.webContents.send("shortcut:sync-now")
-        },
-        { type: "separator" },
-        {
-          label: "Export Logs…",
-          click: () => { exportLogs(); }
-        },
-        {
-          label: "Open Logs Folder",
-          click: () => { shell.openPath(app.getPath("userData")); }
         }
       ]
     }

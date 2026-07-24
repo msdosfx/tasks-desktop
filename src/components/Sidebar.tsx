@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { TaskList, Task } from "../types";
 import ContextMenu from "./ContextMenu";
 
@@ -73,7 +73,17 @@ export default function Sidebar({
   const [editingListId, setEditingListId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
 
+  // Set when the user presses Escape, so the input's onBlur (which fires as the
+  // field unmounts) cancels instead of saving. Without this, Esc "cancel" was
+  // immediately overridden by blur-saves.
+  const renameCancelRef = useRef(false);
   function submitRename(l: TaskList) {
+    if (renameCancelRef.current) {
+      renameCancelRef.current = false;
+      setEditingListId(null);
+      setEditName("");
+      return;
+    }
     const n = editName.trim();
     if (n && n !== l.name) onRenameList(l.id, n);
     setEditingListId(null);
@@ -117,16 +127,20 @@ export default function Sidebar({
 
   async function submitNewList() {
     const trimmed = name.trim();
+    const target = listTarget;
+    // Close and clear the form IMMEDIATELY -- creating a server list awaits a
+    // round-trip + sync (seconds), and leaving the form open + filled let an
+    // impatient second click create a duplicate calendar. Reset first, then work.
+    setName("");
+    setListTarget("local");
+    setAdding(false);
     if (trimmed) {
-      if (listTarget !== "local") {
-        await onCreateServerList(trimmed, listTarget);
+      if (target !== "local") {
+        await onCreateServerList(trimmed, target);
       } else {
         onCreateList(trimmed);
       }
     }
-    setName("");
-    setListTarget("local");
-    setAdding(false);
   }
 
   return (
@@ -175,7 +189,7 @@ export default function Sidebar({
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") submitRename(l);
-                  if (e.key === "Escape") { setEditingListId(null); setEditName(""); }
+                  if (e.key === "Escape") { renameCancelRef.current = true; setEditingListId(null); setEditName(""); }
                 }}
                 onBlur={() => submitRename(l)}
               />

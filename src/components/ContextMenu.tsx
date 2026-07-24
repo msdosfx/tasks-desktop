@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 interface Item {
   label: string;
@@ -15,6 +15,22 @@ interface Props {
 
 export default function ContextMenu({ x, y, items, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  // Start at the click point, then shift up/left after measuring so the whole
+  // menu stays on screen (a right-click near the bottom edge was clipping the
+  // last items -- e.g. "Delete list" -- off the window). Runs before paint to
+  // avoid a visible jump.
+  const [pos, setPos] = useState({ x, y });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    const margin = 8;
+    const nx = x + width > window.innerWidth - margin
+      ? Math.max(margin, window.innerWidth - width - margin) : x;
+    const ny = y + height > window.innerHeight - margin
+      ? Math.max(margin, window.innerHeight - height - margin) : y;
+    setPos({ x: nx, y: ny });
+  }, [x, y, items.length]);
 
   useEffect(() => {
     // Only close on a subsequent click outside the menu. We deliberately do NOT
@@ -31,7 +47,7 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
   }, [onClose]);
 
   return (
-    <div className="context-menu" style={{ left: x, top: y }} ref={ref}>
+    <div className="context-menu" style={{ left: pos.x, top: pos.y }} ref={ref}>
       {items.map((item) => (
         <div
           key={item.label}
