@@ -43,7 +43,8 @@ function extractReminderOffsets(parent: ICAL.Component): number[] {
 export function taskToVTodo(
   task: Task,
   existingUid?: string,
-  reminderOffsets: number[] = []
+  reminderOffsets: number[] = [],
+  parentUid?: string
 ): { uid: string; ics: string } {
   const uid = existingUid || task.caldav_uid || `${task.id}@tasks-desktop`;
   const comp = new ICAL.Component(["vcalendar", [], []]);
@@ -86,8 +87,16 @@ export function taskToVTodo(
     catProp.setValues(tags);
     vtodo.addProperty(catProp);
   }
-  if (task.parent_id) {
-    vtodo.updatePropertyWithValue("related-to", task.parent_id);
+  if (task.parent_id && parentUid) {
+    // Standards-compliant parent link: RELATED-TO must carry the PARENT's UID
+    // with RELTYPE=PARENT, not our internal row id -- otherwise other clients
+    // (Tasks.org, Apple Reminders) can't resolve the hierarchy. The caller
+    // resolves the parent's effective UID; without it we skip rather than emit
+    // a value nothing can match.
+    const rel = new ICAL.Property("related-to");
+    rel.setParameter("reltype", "PARENT");
+    rel.setValue(parentUid);
+    vtodo.addProperty(rel);
   }
   addAlarms(vtodo, reminderOffsets, "END");
 
@@ -125,6 +134,10 @@ export interface ParsedVTodo {
   tags: string;
   updated_at: string;
   reminderOffsets: number[];
+  /** The parent task's UID from RELATED-TO (RELTYPE=PARENT or unset, which
+   *  defaults to PARENT). null when the VTODO has no parent link. The caller
+   *  maps this UID back to a local task id. */
+  parent_uid: string | null;
 }
 
 export function parseVTodo(ics: string): ParsedVTodo | null {
@@ -153,6 +166,15 @@ export function parseVTodo(ics: string): ParsedVTodo | null {
     const categories = vtodo.getFirstProperty("categories");
     const tags = categories ? (categories.getValues() as string[]).join(", ") : "";
 
+    // Parent link: RELATED-TO with RELTYPE=PARENT (or no RELTYPE, which defaults
+    // to PARENT per RFC 5545). Ignore CHILD/SIBLING links.
+    let parentUid: string | null = null;
+    const relProp = vtodo.getFirstProperty("related-to");
+    if (relProp) {
+      const reltype = String(relProp.getParameter("reltype") || "PARENT").toUpperCase();
+      if (reltype === "PARENT") parentUid = String(relProp.getFirstValue());
+    }
+
     return {
       uid,
       title,
@@ -165,7 +187,8 @@ export function parseVTodo(ics: string): ParsedVTodo | null {
       recurrence,
       tags,
       updated_at: dtstamp ? dtstamp.toJSDate().toISOString() : new Date().toISOString(),
-      reminderOffsets: extractReminderOffsets(vtodo)
+      reminderOffsets: extractReminderOffsets(vtodo),
+      parent_uid: parentUid
     };
   } catch (err) {
     console.error("Failed to parse VTODO", err);

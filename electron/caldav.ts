@@ -16,6 +16,7 @@ import {
   listFindByCalendar,
   davUrlKey,
   tasksByList,
+  taskGet,
   taskCreate,
   taskUpdate,
   taskDelete,
@@ -41,6 +42,35 @@ export function syncLog(line: string) {
     } catch { /* file doesn't exist yet */ }
     fs.appendFileSync(file, `${new Date().toISOString()} ${line}\n`);
   } catch { /* logging must never break sync */ }
+}
+
+/** The UID a task uses on the server -- its stored caldav_uid once synced, else
+ *  the same deterministic fallback taskToVTodo would generate. Used to fill a
+ *  subtask's RELATED-TO with its PARENT's UID. */
+function effectiveUid(t: Task): string {
+  return t.caldav_uid || `${t.id}@tasks-desktop`;
+}
+/** The parent's server UID for a subtask, or undefined if it has no parent. */
+function parentUidFor(t: Task): string | undefined {
+  if (!t.parent_id) return undefined;
+  const p = taskGet(t.parent_id);
+  return p ? effectiveUid(p) : undefined;
+}
+/** Map a RELATED-TO parent UID (from a pulled VTODO) back to a local task id.
+ *  Matches either the parent's stored caldav_uid or its deterministic local
+ *  UID. Searches within the same list (subtasks share their parent's list).
+ *  Returns null if the parent isn't present locally yet. */
+function localParentId(parentUid: string | null, listId: string): string | null {
+  if (!parentUid) return null;
+  const candidates = tasksByList(listId);
+  const byUid = candidates.find((t) => t.caldav_uid === parentUid);
+  if (byUid) return byUid.id;
+  const m = parentUid.match(/^(.+)@tasks-desktop$/);
+  if (m) {
+    const byLocal = candidates.find((t) => t.id === m[1]);
+    if (byLocal) return byLocal.id;
+  }
+  return null;
 }
 
 /** Compare two object URLs by path only (servers report absolute or relative). */
@@ -636,6 +666,11 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
           completed_at: parsed.completed_at,
           recurrence: parsed.recurrence,
           tags: parsed.tags,
+          // Nest under the RELATED-TO parent when it's already present locally.
+          // (Edge case: a child pulled before its parent in the same round stays
+          // top-level until a later sync re-pulls it. Rare; only affects nested
+          // structures created on another client.)
+          parent_id: localParentId(parsed.parent_uid, list.id),
           caldav_uid: uid,
           caldav_href: remote.url,
           caldav_etag: remote.etag
@@ -708,7 +743,7 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
       if (!local.caldav_uid) {
         const uid = newUid();
         const offsets = remindersForOwner("task", local.id).map((r) => r.offset_minutes);
-        const { ics } = taskToVTodo(local, uid, offsets);
+        const { ics } = taskToVTodo(local, uid, offsets, parentUidFor(local));
         const filename = `${uid}.ics`;
         try {
           const created = await client.createCalendarObject({
@@ -742,7 +777,7 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
           // comparing a null remote etag skipped this row on every future sync,
           // and pruneMissing skips dirty rows, so the edit could never escape.
           const offsets = remindersForOwner("task", local.id).map((r) => r.offset_minutes);
-          const { ics } = taskToVTodo(local, local.caldav_uid, offsets);
+          const { ics } = taskToVTodo(local, local.caldav_uid, offsets, parentUidFor(local));
           const filename = `${local.caldav_uid}.ics`;
           try {
             const created = await client.createCalendarObject({
@@ -771,7 +806,7 @@ async function syncList(client: Client, list: TaskList): Promise<SyncResult> {
           continue;
         }
         const offsets = remindersForOwner("task", local.id).map((r) => r.offset_minutes);
-        const { ics } = taskToVTodo(local, undefined, offsets);
+        const { ics } = taskToVTodo(local, undefined, offsets, parentUidFor(local));
         const href = local.caldav_href || remote?.url || "";
         try {
           const updated = await client.updateCalendarObject({

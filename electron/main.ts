@@ -432,9 +432,14 @@ function registerIpc() {
     // the sync push does -- reminders as VALARMs, and recurring events with their
     // exdates/overrides -- then bundle into one VCALENDAR.
     const items: string[] = [];
-    for (const t of tasksByList(listId)) {
+    const listTasks = tasksByList(listId);
+    // Map each task to its effective UID so a subtask's RELATED-TO can carry the
+    // PARENT's UID (matches the sync serializer).
+    const uidById = new Map(listTasks.map((t) => [t.id, t.caldav_uid || `${t.id}@tasks-desktop`]));
+    for (const t of listTasks) {
       const offsets = remindersForOwner("task", t.id).map((r) => r.offset_minutes);
-      items.push(taskToVTodo(t, undefined, offsets).ics);
+      const parentUid = t.parent_id ? uidById.get(t.parent_id) : undefined;
+      items.push(taskToVTodo(t, undefined, offsets, parentUid).ics);
     }
     for (const ev of eventsByList(listId)) {
       const offsets = remindersForOwner("event", ev.id).map((r) => r.offset_minutes);
